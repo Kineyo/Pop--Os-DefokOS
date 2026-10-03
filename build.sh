@@ -978,6 +978,11 @@ if [ ! -f /cdrom/casper/filesystem.squashfs ]; then
     done
 fi
 
+# Salir inmediatamente si el sistema ya está instalado (no live)
+if [ ! -d /cdrom ] && [ ! -d /rofs ]; then
+    exit 0
+fi
+
 export DISPLAY="${DISPLAY:-:0}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -1039,8 +1044,8 @@ StartupNotify=true
 Categories=System;
 EOF
 
-cp -f "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop" "${OVERLAY_DIR}/etc/skel/Desktop/install-defokos.desktop"
-chmod +x "${OVERLAY_DIR}/etc/skel/Desktop/install-defokos.desktop"
+# El icono de instalación solo se incluye en el autostart de la sesión Live
+rm -f "${OVERLAY_DIR}/etc/skel/Desktop/install-defokos.desktop" 2>/dev/null || true
 cp -f "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop" "${OVERLAY_DIR}/etc/xdg/autostart/io.calamares.calamares.desktop"
 
 # --- 8. Overlay: Extensión PreMiD para Firefox ---
@@ -1247,12 +1252,12 @@ else
     usermod -aG sudo,audio,video,render,input,plugdev,netdev defokos || true
 fi
 
-# Copiar acceso directo al instalador en el Escritorio del usuario Live
-mkdir -p /etc/skel/Desktop /home/defokos/Desktop
+# Copiar acceso directo al instalador únicamente en el Escritorio del usuario Live
+mkdir -p /home/defokos/Desktop
+rm -f /etc/skel/Desktop/install-defokos.desktop 2>/dev/null || true
 if [ -f /usr/share/applications/io.calamares.calamares.desktop ]; then
-    cp -f /usr/share/applications/io.calamares.calamares.desktop /etc/skel/Desktop/install-defokos.desktop
     cp -f /usr/share/applications/io.calamares.calamares.desktop /home/defokos/Desktop/install-defokos.desktop
-    chmod +x /etc/skel/Desktop/install-defokos.desktop /home/defokos/Desktop/install-defokos.desktop 2>/dev/null || true
+    chmod +x /home/defokos/Desktop/install-defokos.desktop 2>/dev/null || true
     chown -R defokos:defokos /home/defokos/Desktop 2>/dev/null || true
 fi
 chmod +x /usr/local/bin/calamares-launch 2>/dev/null || true
