@@ -1,0 +1,134 @@
+name: Build DefokOS Custom ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_iso_url:
+        description: 'URL de la ISO base de Pop!_OS'
+        required: false
+        default: 'https://pop-iso.sfo2.cdn.digitaloceanspaces.com/22.04/amd64/intel/latest/pop-os_22.04_amd64_intel_latest.iso'
+      create_release:
+        description: '¿Publicar automáticamente en GitHub Releases?'
+        required: true
+        type: boolean
+        default: false
+      tag_name:
+        description: 'Nombre de la etiqueta para la Release (ej. v24.04.1)'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package DefokOS ISO
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space on Runner VM
+        run: |
+          echo "=== Espacio de disco antes de la limpieza ==="
+          df -h
+          
+          # Eliminar toolchains grandes no utilizados por el build
+          echo "Liberando espacio eliminando SDKs innecesarios de GitHub Actions..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo docker image prune --all --force 2>/dev/null || true
+          
+          echo "=== Espacio de disco tras la limpieza ==="
+          df -h
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xorriso \
+            squashfs-tools \
+            curl \
+            rsync \
+            mtools \
+            dosfstools \
+            isolinux \
+            syslinux-utils \
+            zstd \
+            coreutils
+
+      - name: Make Scripts Executable
+        run: |
+          chmod +x build.sh scripts/*.sh
+
+      - name: Execute ISO Build
+        env:
+          BASE_ISO_URL: ${{ github.event.inputs.base_iso_url || 'https://pop-iso.sfo2.cdn.digitaloceanspaces.com/22.04/amd64/intel/latest/pop-os_22.04_amd64_intel_latest.iso' }}
+          COMPRESSION: 'zstd'
+        run: |
+          sudo -E ./build.sh
+
+      - name: Identify Generated Artifacts
+        id: artifacts
+        run: |
+          ISO_FILE=$(ls out/*.iso | head -n 1)
+          SHA_FILE=$(ls out/*.sha256 | head -n 1)
+          echo "iso_path=${ISO_FILE}" >> $GITHUB_OUTPUT
+          echo "sha_path=${SHA_FILE}" >> $GITHUB_OUTPUT
+          echo "iso_name=$(basename ${ISO_FILE})" >> $GITHUB_OUTPUT
+
+      - name: Upload ISO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifacts.outputs.iso_name }}
+          path: |
+            ${{ steps.artifacts.outputs.iso_path }}
+            ${{ steps.artifacts.outputs.sha_path }}
+          retention-days: 5
+
+      - name: Determine Release Tag
+        id: release_meta
+        if: ${{ github.event.inputs.create_release == 'true' || startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v24.04-$(date +'%Y%m%d%H%M')"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Publish to GitHub Releases
+        if: ${{ steps.release_meta.outputs.tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: DefokOS ${{ steps.release_meta.outputs.tag }} (Utane Uta Edition)
+          body: |
+            ## DefokOS // Utane Uta Edition (${{ steps.release_meta.outputs.tag }})
+
+            Distribución Linux temática basada en Pop!_OS con entorno COSMIC y estética industrial/retro.
+            
+            ### Especificaciones
+            - **Paleta de Colores**: Lavanda `#b49fcc` y Carbón Oscuro `#24272e`
+            - **Entorno de Escritorio**: Pop!_OS COSMIC Desktop
+            - **Paquetería Base**: Flatpak (Flathub habilitado a nivel de sistema), APT (.deb) y soporte AppImage out-of-the-box (FUSE2/FUSE3).
+            - **Herramientas de Fábrica**: Kitty Terminal, VSCodium, Steam, Fastfetch, PipeWire Pro Audio, Audacity, pavucontrol.
+
+            ### Verificación de Integridad (SHA256)
+            ```
+            $(cat ${{ steps.artifacts.outputs.sha_path }})
+            ```
+          files: |
+            ${{ steps.artifacts.outputs.iso_path }}
+            ${{ steps.artifacts.outputs.sha_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

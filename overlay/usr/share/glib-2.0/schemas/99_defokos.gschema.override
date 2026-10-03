@@ -1,0 +1,31 @@
+# ==============================================================================
+#  DEFOKOS // GLIB GSETTINGS OVERRIDES
+# ==============================================================================
+
+[org.gnome.desktop.background]
+picture-uri='file:///usr/share/backgrounds/defokos/defoko-default.svg'
+picture-uri-dark='file:///usr/share/backgrounds/defokos/defoko-default.svg'
+picture-options='zoom'
+primary-color='#24272e'
+secondary-color='#1b1d22'
+
+[org.gnome.desktop.screensaver]
+picture-uri='file:///usr/share/backgrounds/defokos/defoko-default.svg'
+primary-color='#24272e'
+
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+gtk-theme='Pop-dark'
+icon-theme='Pop'
+cursor-theme='Pop'
+font-antialiasing='rgba'
+font-hinting='slight'
+
+[org.gnome.desktop.sound]
+theme-name='defokos'
+event-sounds=true
+input-feedback-sounds=false
+
+# Pop COSMIC Desktop & Shell Integration
+[org.gnome.shell]
+favorite-apps=['kitty.desktop', 'codium.desktop', 'org.pulseaudio.pavucontrol.desktop', 'steam.desktop', 'io.github.spacingbat3.webcord.desktop', 'com.discordapp.Discord.desktop', 'com.system76.CosmicStore.desktop', 'org.gnome.Nautilus.desktop']

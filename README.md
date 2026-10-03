@@ -1,0 +1,147 @@
+# DefokOS // Utane Uta Edition 🎙️🔧
+
+> **Distribución Linux personalizada basada en Pop!_OS (COSMIC Desktop)** con temática industrial retro inspirada en **Defoko / Utane Uta** (Utaloid Project 01). Diseñada para creadores sonoros, entusiastas de la síntesis de voz y desarrolladores de software.
+
+---
+
+## 🎨 Identidad Visual y Estética
+
+- **Color Primario (Acento):** `#b49fcc` (Lavanda Defoko)
+- **Color de Fondo / Base:** `#24272e` (Carbón Industrial Oscuro)
+- **Acentos Secundarios:** `#6f737e` (Gris Pizarra), `#88c0d0` (Cian de Señal Synth), `#ded8e6` (Seda Clara)
+- **Entorno de Escritorio:** **COSMIC Desktop** (Pop!_OS) en modo oscuro nativo.
+- **Tipografía Predeterminada:** JetBrains Mono / Fira Code.
+
+---
+
+## 🚀 Características Principales
+
+1. **Gestión Universal de Paquetes:**
+   - **APT (.deb):** Repositorios Universe, Multiverse y Restricted activados.
+   - **Flatpak:** Repositorio Flathub habilitado a nivel global del sistema.
+   - **AppImage:** Soporte directo con bibliotecas de compatibilidad FUSE (`libfuse2` / `libfuse2t64` y `fuse3`), permitiendo doble clic o ejecución directa sin errores de runtime.
+   - **Binarios ELF 32/64-bit:** Arquitectura `i386` habilitada para Steam y emulación Wine.
+2. **Herramientas para Creadores & Devs:**
+   - Terminal predeterminada **Kitty** con tema lavanda/carbón y soporte GPU.
+   - **VSCodium** integrado desde su repositorio oficial sin telemetría de Microsoft.
+   - **Steam** preconfigurado para gaming y proton-ge.
+   - Suite de audio con **PipeWire**, **Audacity**, **pavucontrol**, **sox** y librerías DSP.
+   - **Fastfetch** personalizado con arte ASCII de Utane Uta y métricas de audio.
+
+---
+
+## 📂 Estructura del Repositorio
+
+```text
+DefokOS/
+├── build.sh                       # Script maestro de compilación (requiere sudo)
+├── scripts/
+│   ├── chroot-setup.sh            # Aprovisionamiento de paquetes y repositorios en chroot
+│   └── apply-theme.sh             # Compilación de schemas, wallpapers y branding
+├── overlay/                       # Capa de archivos inyectada directamente al rootfs
+│   ├── etc/
+│   │   ├── os-release             # Metadatos del sistema operativo (DefokOS)
+│   │   ├── lsb-release            # Información de distribución para scripts de sistema
+│   │   ├── issue / issue.net      # Banners de terminal TTY
+│   │   └── skel/                  # Plantilla para usuarios nuevos (dotfiles)
+│   │       ├── .bashrc            # Prompt temático con acentos lavanda
+│   │       ├── .bash_aliases      # Comandos rápidos y mantenimiento
+│   │       └── .config/
+│   │           ├── kitty/         # kitty.conf con paleta Utane Uta
+│   │           ├── fastfetch/     # Perfil con ASCII art de Defoko
+│   │           └── cosmic/        # Configuraciones de acentos y wallpapers para COSMIC
+│   └── usr/share/
+│       ├── backgrounds/defokos/   # Wallpapers 4K en formato SVG
+│       ├── glib-2.0/schemas/      # Overrides de dconf/gsettings (tema oscuro, fondo)
+│       └── sounds/defokos/        # Esquema de sonidos del sistema
+└── .github/workflows/
+    └── build-iso.yml              # Pipeline de CI en GitHub Actions con limpieza de VM
+```
+
+---
+
+## 🛠️ Requisitos de Compilación Local
+
+Para generar la ISO en un sistema Linux local (Debian, Ubuntu, Pop!_OS, etc.):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    xorriso \
+    squashfs-tools \
+    curl \
+    rsync \
+    dosfstools \
+    mtools \
+    isolinux \
+    syslinux-utils \
+    zstd \
+    coreutils
+```
+
+> [!NOTE]
+> Se recomienda disponer de al menos **30 GB de espacio libre en disco** y **8 GB de memoria RAM** para el desempaquetado y compresión de SquashFS.
+
+---
+
+## 🔨 Instrucciones de Construcción
+
+### Opción A: Descarga automática de la base Pop!_OS
+
+Simplemente ejecuta el script maestro con privilegios de superusuario:
+
+```bash
+chmod +x build.sh scripts/*.sh
+sudo ./build.sh
+```
+
+El script descargará la ISO base de Pop!_OS (si no está ya en caché), extraerá el sistema de archivos, inyectará el overlay, ejecutará el aprovisionamiento dentro de un chroot aislado y construirá la ISO híbrida final en `./out/`.
+
+### Opción B: Usando una ISO base local existente
+
+Si ya tienes una ISO de Pop!_OS descargada en tu equipo:
+
+```bash
+sudo ./build.sh --iso /ruta/a/pop-os_22.04_amd64_intel_latest.iso
+```
+
+### Opciones y Variables de Entorno
+
+Puedes afinar el proceso mediante variables de entorno:
+
+```bash
+# Cambiar URL de la imagen base:
+sudo BASE_ISO_URL="https://mi-servidor.org/pop-os.iso" ./build.sh
+
+# Cambiar algoritmo de compresión (zstd por defecto, o xz para máxima compresión):
+sudo COMPRESSION="xz" ./build.sh
+```
+
+Al terminar, encontrarás la imagen booteable y su hash criptográfico en la carpeta `out/`:
+- `out/DefokOS-24.04-amd64-YYYYMMDD.iso`
+- `out/DefokOS-24.04-amd64-YYYYMMDD.iso.sha256`
+
+---
+
+## 🌐 Compilación Automatizada en GitHub Actions
+
+El repositorio incluye el flujo de trabajo [build-iso.yml](file:///.github/workflows/build-iso.yml) optimizado para GitHub Actions:
+
+1. **Liberación proactiva de espacio:** Desinstala SDKs pesados de la VM de runner (Android, .NET, Haskell, Docker) para garantizar más de 45 GB de disco disponible.
+2. **Ejecución de build.sh:** Descarga la base oficial, aplica los dotfiles y reempaqueta la ISO con soporte UEFI y BIOS.
+3. **Generación de Release:** Puedes disparar la compilación manualmente desde la pestaña **Actions** con la opción de publicar automáticamente en **Releases**, o simplemente empujando un tag Git (`git tag v1.0.0 && git push origin v1.0.0`).
+
+---
+
+## 🎨 Personalización Adicional
+
+- **Añadir o remover paquetes:** Edita el array `APT_PACKAGES` en [scripts/chroot-setup.sh](file:///scripts/chroot-setup.sh).
+- **Modificar dotfiles:** Cualquier archivo que coloques dentro de [overlay/etc/skel/](file:///overlay/etc/skel/) se copiará automáticamente al directorio de inicio de cada nuevo usuario creado en el sistema.
+- **Cambiar el fondo de pantalla:** Reemplaza o añade archivos en [overlay/usr/share/backgrounds/defokos/](file:///overlay/usr/share/backgrounds/defokos/).
+- **Añadir sonidos del sistema:** Coloca archivos `.ogg` en [overlay/usr/share/sounds/defokos/stereo/](file:///overlay/usr/share/sounds/defokos/stereo/).
+
+---
+
+## 📄 Licencia
+
+Este proyecto y sus scripts de automatización se distribuyen bajo la licencia MIT. Pop!_OS y COSMIC son marcas y creaciones de System76. Utane Uta / Defoko es un personaje de dominio público originario de la comunidad UTAU (Ameya/Ayame).
