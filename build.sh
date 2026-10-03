@@ -160,14 +160,44 @@ log_info "Directorio de salida:   ${OUT_DIR}"
 log_step "Paso 3: Localizando o descargando la ISO base de Pop!_OS"
 
 BASE_ISO_FILE="${WORK_DIR}/base.iso"
+NEED_DOWNLOAD=false
 
-if [[ -n "${LOCAL_BASE_ISO}" ]] && [[ -f "${LOCAL_BASE_ISO}" ]]; then
-    log_info "Usando ISO local provista por el usuario: ${LOCAL_BASE_ISO}"
+# 1. Si el usuario especificó una ISO local con --iso
+if [[ -n "${LOCAL_BASE_ISO}" ]]; then
+    if [[ ! -f "${LOCAL_BASE_ISO}" ]]; then
+        log_err "El archivo especificado con --iso no existe: ${LOCAL_BASE_ISO}"
+        exit 1
+    fi
+    LOCAL_SIZE=$(stat -c%s "${LOCAL_BASE_ISO}" 2>/dev/null || echo 0)
+    if [[ $LOCAL_SIZE -lt 500000000 ]]; then
+        log_err "El archivo ${LOCAL_BASE_ISO} es demasiado pequeño ($(( LOCAL_SIZE / 1024 / 1024 )) MB). Parece estar incompleto o dañado."
+        exit 1
+    fi
+    log_info "Usando ISO local provista por el usuario: ${LOCAL_BASE_ISO} ($(( LOCAL_SIZE / 1024 / 1024 )) MB)"
     BASE_ISO_FILE="${LOCAL_BASE_ISO}"
+
+# 2. Si ya existe un archivo base.iso en work/
 elif [[ -f "${BASE_ISO_FILE}" ]]; then
-    log_info "Se encontró una imagen base en caché: ${BASE_ISO_FILE}"
+    CACHED_SIZE=$(stat -c%s "${BASE_ISO_FILE}" 2>/dev/null || echo 0)
+    # Una ISO de Pop!_OS pesa aproximadamente ~2.5 GB a 3 GB. Mínimo 500 MB para considerarla válida
+    if [[ $CACHED_SIZE -lt 500000000 ]]; then
+        log_warn "Se encontró un archivo base.iso en caché pero está incompleto o dañado ($(( CACHED_SIZE / 1024 / 1024 )) MB)."
+        log_warn "Eliminándolo y procediendo a descargar la imagen oficial..."
+        rm -f "${BASE_ISO_FILE}"
+        NEED_DOWNLOAD=true
+    else
+        log_info "Se encontró una imagen base válida en caché: ${BASE_ISO_FILE} ($(( CACHED_SIZE / 1024 / 1024 )) MB)"
+        NEED_DOWNLOAD=false
+    fi
+else
+    NEED_DOWNLOAD=true
+fi
+
+# 3. Descarga oficial si no se dispone de imagen local válida
+if [[ "${NEED_DOWNLOAD}" == "true" ]]; then
     log_info "Descargando imagen ISO base desde:"
     log_info "  ${BASE_ISO_URL}"
+    rm -f "${BASE_ISO_FILE}.tmp"
     if ! curl -L -C - --fail --progress-bar -o "${BASE_ISO_FILE}.tmp" "${BASE_ISO_URL}"; then
         log_err "Error crítico al descargar la ISO base (Código de salida de curl: $?)."
         log_err "URL intentada: ${BASE_ISO_URL}"
@@ -180,7 +210,7 @@ elif [[ -f "${BASE_ISO_FILE}" ]]; then
         exit 6
     fi
     mv "${BASE_ISO_FILE}.tmp" "${BASE_ISO_FILE}"
-    log_success "Descarga de ISO base completada."
+    log_success "Descarga de ISO base completada exitosamente."
 fi
 
 # ==============================================================================
@@ -188,20 +218,31 @@ fi
 # ==============================================================================
 log_step "Paso 4: Extrayendo contenido de la ISO base y geometría de arranque"
 
+if [[ ! -f "${BASE_ISO_FILE}" ]]; then
+    log_err "No se encontró el archivo ISO requerido: ${BASE_ISO_FILE}"
+    exit 1
+fi
+
 # Extraer parámetros exactos de arranque con xorriso para garantizar booteo EFI y BIOS
 BOOT_OPTS_FILE="${WORK_DIR}/el_torito_opts.txt"
 log_info "Analizando estructura híbrida de arranque con xorriso..."
 xorriso -indev "${BASE_ISO_FILE}" -report_el_torito as_mkisofs > "${BOOT_OPTS_FILE}" 2>/dev/null || true
 
-# Montar y copiar archivos de la ISO al directorio de extracción
-log_info "Montando imagen ISO base..."
-mount -o loop,ro "${BASE_ISO_FILE}" "${ISO_MOUNT_DIR}"
+# Extracción de la ISO (Primero intenta montaje loop; si el kernel o entorno falla, usa xorriso directo)
+log_info "Extrayendo árbol de archivos de la ISO base..."
+mkdir -p "${ISO_MOUNT_DIR}" "${ISO_EXTRACT_DIR}"
 
-log_info "Extrayendo árbol de archivos de la ISO (rsync)..."
-rsync -a --delete --info=progress2 "${ISO_MOUNT_DIR}/" "${ISO_EXTRACT_DIR}/"
-
-umount -lf "${ISO_MOUNT_DIR}"
-log_success "Árbol de la ISO extraído correctamente."
+if mount -o loop,ro "${BASE_ISO_FILE}" "${ISO_MOUNT_DIR}" 2>/dev/null; then
+    log_info "Montaje loop exitoso. Sincronizando árbol con rsync..."
+    rsync -a --delete --info=progress2 "${ISO_MOUNT_DIR}/" "${ISO_EXTRACT_DIR}/"
+    umount -lf "${ISO_MOUNT_DIR}" 2>/dev/null || true
+    log_success "Árbol de la ISO extraído correctamente vía loop mount."
+else
+    log_warn "El montaje loop no estuvo disponible (código 32 o entorno restringido). Extrayendo directamente con xorriso..."
+    xorriso -osirrox on -indev "${BASE_ISO_FILE}" -extract / "${ISO_EXTRACT_DIR}" 2>/dev/null
+    chmod -R u+w "${ISO_EXTRACT_DIR}"
+    log_success "Árbol de la ISO extraído correctamente vía xorriso."
+fi
 
 # ==============================================================================
 # PASO 5: DESCOMPRESIÓN DEL SISTEMA DE ARCHIVOS SQUASHFS
