@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  DEFOKOS LINUX // MASTER BUILD ORCHESTRATOR (build.sh)
+#  DEFOKOS LINUX // MASTER COMPILATION ORCHESTRATOR (build.sh)
+#  Construcción desde Cero: Sin ISOs precompiladas // Vía Repositorios Oficiales
 #  Edición: Utane Uta // Base: Pop!_OS 24.04 LTS (Noble) // COSMIC Desktop Wayland
 #  Paleta: Lavanda (#b49fcc) & Pizarra Oscura (#24272e)
 # ==============================================================================
@@ -32,7 +33,7 @@ log_banner() {
  | | | |/ _ \ |_ / _ \| |/ / | \___ \ 
  | |_| |  __/  _| (_) |   <| |_| |__) |
  |____/ \___|_|  \___/|_|\_\\___/|____/ 
-  Utane Uta Edition // COSMIC Desktop // Pop!_OS 24.04 LTS Noble
+  Utane Uta Edition // COSMIC Desktop // Compilación desde Repositorios
 ======================================================================
 EOF
     echo -e "${C_RESET}"
@@ -40,22 +41,21 @@ EOF
 
 # --- Ayuda preliminar sin requerir sudo ---
 if [[ " $* " =~ " --help " ]] || [[ " $* " =~ " -h " ]]; then
-    echo "Uso: sudo $0 [--clean] [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
+    echo "Uso: sudo $0 [--repack] [--pack-only]"
     echo ""
-    echo "Opciones:"
-    echo "  --clean                 Elimina completamente la base anterior para una reconstrucción 100% limpia"
-    echo "  --bootstrap             Construye el sistema desde cero vía debootstrap y repositorios oficiales System76"
-    echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
-    echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
-    echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
+    echo "Modo por defecto: Compilación total desde cero vía debootstrap noble"
+    echo "y repositorios oficiales System76/Pop!_OS (Sin usar ISOs precompiladas)."
     echo ""
-    echo "Variables de entorno opcionales:"
-    echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso ni --bootstrap"
-    echo "  COMPRESSION     Algoritmo de compresión para squashfs (zstd o xz, por defecto: zstd)"
+    echo "Opciones opcionales:"
+    echo "  --repack                Aplica overlay al chroot existente y recompone la ISO (~2-3 min)"
+    echo "  --pack-only             Omite aprovisionamiento y recompone la ISO directamente (~15 seg)"
+    echo ""
+    echo "Variables de entorno:"
+    echo "  COMPRESSION     Algoritmo de compresión squashfs (zstd o xz, por defecto: zstd)"
     exit 0
 fi
 
-# --- Verificación de Privilegios Root ---
+# --- Elevación Automática de Privilegios a Root ---
 if [[ "${EUID}" -ne 0 ]]; then
     log_warn "Elevando privilegios a superusuario (root)..."
     exec sudo "$0" "$@"
@@ -70,41 +70,22 @@ SCRIPTS_DIR="${PROJECT_ROOT}/scripts"
 ASSETS_DIR="${PROJECT_ROOT}/assets"
 DEBS_DIR="${PROJECT_ROOT}/debs"
 
-ISO_MOUNT_DIR="${WORK_DIR}/iso_mount"
 ISO_EXTRACT_DIR="${WORK_DIR}/iso_extracted"
 CHROOT_DIR="${WORK_DIR}/squashfs_root"
 
-# URL oficial de Pop!_OS 24.04 LTS COSMIC Desktop (Wayland)
-DEFAULT_BASE_URL="https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso"
-BASE_ISO_URL="${BASE_ISO_URL:-${DEFAULT_BASE_URL}}"
-
-# Nombre de la ISO resultante
+# Metadatos de la ISO
 DATE_TAG="$(date +%Y%m%d)"
 DEFOKOS_VERSION="24.04"
 ISO_OUTPUT_NAME="DefokOS-${DEFOKOS_VERSION}-amd64-${DATE_TAG}.iso"
 VOLUME_LABEL="DEFOKOS_24_04"
 
 # Parámetros y banderas inicializadas
-LOCAL_BASE_ISO=""
-BOOTSTRAP=false
 PACK_ONLY=false
 REPACK=false
-CLEAN=false
+COMPRESSION="${COMPRESSION:-zstd}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --clean)
-            CLEAN=true
-            shift
-            ;;
-        --bootstrap)
-            BOOTSTRAP=true
-            shift
-            ;;
-        --iso)
-            LOCAL_BASE_ISO="$2"
-            shift 2
-            ;;
         --pack-only)
             PACK_ONLY=true
             shift
@@ -120,28 +101,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-COMPRESSION="${COMPRESSION:-zstd}"
-
-# Auto-detección de la ISO oficial local de Pop!_OS 24.04
 REAL_USER="${SUDO_USER:-${USER}}"
-if [[ -z "${LOCAL_BASE_ISO}" ]]; then
-    for candidate_iso in \
-        "/home/alex/Descargas/pop-os_24.04_amd64_generic_28.iso" \
-        "/home/${REAL_USER}/Descargas/pop-os_24.04_amd64_generic_28.iso" \
-        "/home/${REAL_USER}/Descargas/pop-os_24.04"*.iso \
-        "/home/${REAL_USER}/Downloads/pop-os_24.04"*.iso \
-        "${HOME}/Descargas/pop-os_24.04"*.iso \
-        "${HOME}/Downloads/pop-os_24.04"*.iso; do
-        if [[ -f "${candidate_iso}" ]]; then
-            LOCAL_BASE_ISO="${candidate_iso}"
-            log_info "Auto-detectada imagen base local de Pop!_OS 24.04: ${LOCAL_BASE_ISO}"
-            break
-        fi
-    done
-fi
-
-BASE_ISO_FILE="${LOCAL_BASE_ISO:-${WORK_DIR}/base.iso}"
-BOOT_OPTS_FILE="${WORK_DIR}/el_torito_opts.txt"
 
 # --- Manejador de Limpieza y Salida Segura (Trap) ---
 cleanup_mounts() {
@@ -157,8 +117,7 @@ cleanup_mounts() {
         "${CHROOT_DIR}/proc" \
         "${CHROOT_DIR}/dev/pts" \
         "${CHROOT_DIR}/dev" \
-        "${CHROOT_DIR}" \
-        "${ISO_MOUNT_DIR}"; do
+        "${CHROOT_DIR}"; do
         if mountpoint -q "$mp" 2>/dev/null; then
             log_info "Desmontando: $mp"
             umount -lf "$mp" 2>/dev/null || true
@@ -177,35 +136,29 @@ trap cleanup_mounts EXIT INT TERM
 log_banner
 
 # ==============================================================================
-# PASO 0: LIMPIEZA DE BASE PREVIA (SI SE SOLICITA O ES POP!_OS 22.04 OBSOLETA)
+# PASO 0: LIMPIEZA INICIAL DEL ESPACIO DE TRABAJO
 # ==============================================================================
-log_step "Paso 0: Comprobando estado del espacio de trabajo"
+if [[ "${PACK_ONLY}" != "true" ]] && [[ "${REPACK}" != "true" ]]; then
+    log_step "Paso 0: Purgando y limpiando espacio de trabajo anterior"
 
-if [[ -f "${WORK_DIR}/base.iso" ]]; then
-    if file "${WORK_DIR}/base.iso" 2>/dev/null | grep -qi "22\.04"; then
-        log_warn "Se detectó que work/base.iso es Pop!_OS 22.04 (antigua con GNOME/X11)."
-        log_warn "Purgando archivo obsoleto para garantizar una instalación limpia de Pop!_OS 24.04..."
-        rm -f "${WORK_DIR}/base.iso"
-        CLEAN=true
-    fi
-fi
-
-if [[ "${CLEAN}" == "true" ]]; then
-    log_warn "Opción --clean activada: Purgando chroot, extracciones y archivos temporales..."
     set +e
-    for mp in "${CHROOT_DIR}/run" "${CHROOT_DIR}/sys" "${CHROOT_DIR}/proc" "${CHROOT_DIR}/dev/pts" "${CHROOT_DIR}/dev" "${CHROOT_DIR}" "${ISO_MOUNT_DIR}"; do
+    for mp in "${CHROOT_DIR}/run" "${CHROOT_DIR}/sys" "${CHROOT_DIR}/proc" "${CHROOT_DIR}/dev/pts" "${CHROOT_DIR}/dev" "${CHROOT_DIR}"; do
         if mountpoint -q "$mp" 2>/dev/null; then umount -lf "$mp" 2>/dev/null || true; fi
     done
     set -e
-    rm -rf "${CHROOT_DIR}" "${ISO_EXTRACT_DIR}" "${ISO_MOUNT_DIR}" "${WORK_DIR}/base.iso" "${BOOT_OPTS_FILE}"
+
+    rm -rf "${WORK_DIR}" "${OUT_DIR}" "${OVERLAY_DIR}" "${SCRIPTS_DIR}" "${ASSETS_DIR}" "${DEBS_DIR}"
 fi
 
-# ==============================================================================
-# PASO 1: INSTALACIÓN AUTOMÁTICA DE HERRAMIENTAS EN EL HOST
-# ==============================================================================
-log_step "Paso 1: Verificando e instalando herramientas necesarias en el host"
+mkdir -p "${WORK_DIR}" "${OUT_DIR}" "${OVERLAY_DIR}" "${SCRIPTS_DIR}" "${ASSETS_DIR}" "${DEBS_DIR}" "${ISO_EXTRACT_DIR}"
 
-HOST_PACKAGES=(
+# ==============================================================================
+# PASO 1: INSTALACIÓN AUTOMÁTICA DE DEPENDENCIAS EN EL HOST
+# ==============================================================================
+log_step "Paso 1: Instalando y verificando herramientas necesarias en el host"
+
+HOST_DEPS=(
+    debootstrap
     xorriso
     squashfs-tools
     curl
@@ -216,111 +169,87 @@ HOST_PACKAGES=(
     imagemagick
     ffmpeg
     fontconfig
-    debootstrap
     coreutils
+    grub-common
+    grub-pc-bin
+    grub-efi-amd64-bin
+    isolinux
+    syslinux-common
 )
 
-MISSING_TOOLS=()
-for tool in xorriso mksquashfs unsquashfs curl rsync mcopy mformat python3 convert ffmpeg fc-cache; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        MISSING_TOOLS+=("$tool")
-    fi
-done
-
-if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
-    log_warn "Faltan herramientas en el host: ${MISSING_TOOLS[*]}"
-    log_info "Instalando paquetes requeridos vía apt-get..."
-    apt-get update -y
-    apt-get install -y --no-install-recommends "${HOST_PACKAGES[@]}"
-fi
-log_success "Todas las herramientas del host están listas."
+log_info "Asegurando dependencias en el sistema anfitrión..."
+apt-get update -y
+apt-get install -y --no-install-recommends "${HOST_DEPS[@]}"
+log_success "Todas las dependencias del host están instaladas y listas."
 
 # ==============================================================================
-# PASO 2: PREPARACIÓN DE DIRECTORIOS Y RECURSOS
+# PASO 2: RECOLECCIÓN DE ASSETS Y APLICACIONES (.DEB, FUENTES, FONDOS, ICONOS)
 # ==============================================================================
-log_step "Paso 2: Preparando espacio de trabajo y directorios"
+log_step "Paso 2: Recolectando icono Defoko, fondo de arranque, fuentes y paquetes .deb"
 
-mkdir -p "${WORK_DIR}" "${OUT_DIR}" "${OVERLAY_DIR}" "${SCRIPTS_DIR}" "${ASSETS_DIR}" "${DEBS_DIR}"
-mkdir -p "${ISO_MOUNT_DIR}" "${ISO_EXTRACT_DIR}"
-log_info "Directorio de trabajo: ${WORK_DIR}"
-log_info "Directorio de salida:   ${OUT_DIR}"
-
-# ==============================================================================
-# PASO 3: OBTENCIÓN Y PREPARACIÓN DE ASSETS, FUENTES, ICONOS Y PAQUETES .DEB
-# ==============================================================================
-log_step "Paso 3: Recolectando assets, iconos, fuentes y aplicaciones nativas"
-
-# 1. Icono personalizado Defoko Pop!_OS
-ICON_SOURCE=""
+# 1. Icono personalizado de Defoko
+ICON_FOUND=""
 for cand in \
-    "${ASSETS_DIR}/Pop!_OS_Icon.png" \
     "/home/alex/Descargas/Pop!_OS_Icon.png" \
     "/home/${REAL_USER}/Descargas/Pop!_OS_Icon.png" \
     "${HOME}/Descargas/Pop!_OS_Icon.png"; do
     if [[ -f "$cand" ]]; then
-        ICON_SOURCE="$cand"
+        ICON_FOUND="$cand"
         break
     fi
 done
 
-if [[ -n "${ICON_SOURCE}" ]]; then
-    log_info "Utilizando icono fuente: ${ICON_SOURCE}"
-    cp -f "${ICON_SOURCE}" "${ASSETS_DIR}/Pop!_OS_Icon.png"
+if [[ -n "${ICON_FOUND}" ]]; then
+    log_info "Utilizando icono fuente: ${ICON_FOUND}"
+    cp -f "${ICON_FOUND}" "${ASSETS_DIR}/Pop!_OS_Icon.png"
 fi
 
-# 2. Fondo de pantalla de arranque del sistema (systemd_defoko_background)
-BG_SOURCE=""
+# 2. Fondo de arranque del sistema (systemd_defoko_background)
+BG_FOUND=""
 for cand in \
-    "${ASSETS_DIR}/systemd_defoko_background.jpeg" \
     "/home/alex/Descargas/systemd_defoko_background.jpeg" \
     "/home/${REAL_USER}/Descargas/systemd_defoko_background.jpeg" \
     "${HOME}/Descargas/systemd_defoko_background.jpeg"; do
     if [[ -f "$cand" ]]; then
-        BG_SOURCE="$cand"
+        BG_FOUND="$cand"
         break
     fi
 done
 
-if [[ -n "${BG_SOURCE}" ]]; then
-    log_info "Procesando fondo de arranque desde: ${BG_SOURCE}"
-    cp -f "${BG_SOURCE}" "${ASSETS_DIR}/systemd_defoko_background.jpeg"
-    
-    # Generar versión PNG 1080p para GRUB
-    ffmpeg -y -i "${BG_SOURCE}" -vf "scale=1920:1080" "${ASSETS_DIR}/boot_background_1080p.png" 2>/dev/null || true
-    
-    # Generar versión BMP 24-bit sin compresión 1920x1080 para systemd-boot (UEFI)
-    ffmpeg -y -i "${BG_SOURCE}" -vf "scale=1920:1080" -pix_fmt bgr24 "${ASSETS_DIR}/splash.bmp" 2>/dev/null || true
+if [[ -n "${BG_FOUND}" ]]; then
+    log_info "Procesando fondo temático de arranque: ${BG_FOUND}"
+    cp -f "${BG_FOUND}" "${ASSETS_DIR}/systemd_defoko_background.jpeg"
+    ffmpeg -y -i "${BG_FOUND}" -vf "scale=1920:1080" "${ASSETS_DIR}/boot_background_1080p.png" 2>/dev/null || true
+    ffmpeg -y -i "${BG_FOUND}" -vf "scale=1920:1080" -pix_fmt bgr24 "${ASSETS_DIR}/splash.bmp" 2>/dev/null || true
 fi
 
 # 3. Fuente Pixelify Sans
 mkdir -p "${ASSETS_DIR}/fonts"
-FONT_TARGET="${ASSETS_DIR}/fonts/PixelifySans-VariableFont_wght.ttf"
-if [[ ! -f "${FONT_TARGET}" ]]; then
-    if [[ -f "/home/alex/Descargas/Pixelify_Sans.zip" ]]; then
-        unzip -p "/home/alex/Descargas/Pixelify_Sans.zip" "*PixelifySans*.ttf" > "${FONT_TARGET}" 2>/dev/null || true
-    fi
+FONT_FILE="${ASSETS_DIR}/fonts/PixelifySans-VariableFont_wght.ttf"
+if [[ -f "/home/alex/Descargas/Pixelify_Sans.zip" ]]; then
+    unzip -p "/home/alex/Descargas/Pixelify_Sans.zip" "*PixelifySans*.ttf" > "${FONT_FILE}" 2>/dev/null || true
 fi
-if [[ ! -f "${FONT_TARGET}" ]] || [[ $(stat -c%s "${FONT_TARGET}" 2>/dev/null || echo 0) -lt 1000 ]]; then
+if [[ ! -f "${FONT_FILE}" ]] || [[ $(stat -c%s "${FONT_FILE}" 2>/dev/null || echo 0) -lt 1000 ]]; then
     log_info "Descargando Pixelify Sans desde Google Fonts..."
-    curl -fsSL --connect-timeout 15 -o "${FONT_TARGET}" \
+    curl -fsSL --connect-timeout 15 -o "${FONT_FILE}" \
         "https://github.com/google/fonts/raw/main/ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf" || true
 fi
 
 # 4. Paquetes nativos .deb (YouTube Music, Discord, Steam)
 if [[ ! -f "${DEBS_DIR}/youtube-music.deb" ]]; then
-    log_info "Descargando YouTube Music Desktop .deb..."
+    log_info "Descargando YouTube Music Desktop .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/youtube-music.deb" \
         "https://github.com/ytmdesktop/ytmdesktop/releases/download/v2.0.12/youtube-music-desktop-app_2.0.12_amd64.deb" || true
 fi
 
 if [[ ! -f "${DEBS_DIR}/discord.deb" ]]; then
-    log_info "Descargando Discord .deb..."
+    log_info "Descargando Discord .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/discord.deb" \
         "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=linux&arch=x64&format=deb" || true
 fi
 
 if [[ ! -f "${DEBS_DIR}/steam.deb" ]]; then
-    log_info "Descargando Steam .deb..."
+    log_info "Descargando Steam .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/steam.deb" \
         "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" || true
 fi
@@ -338,11 +267,11 @@ for cand in \
 done
 
 # ==============================================================================
-# PASO 4: GENERACIÓN DE SCRIPTS AUXILIARES Y PLANTILLAS OVERLAY
+# PASO 3: GENERACIÓN DINÁMICA DE PLANTILLAS Y CONFIGURACIONES
 # ==============================================================================
-log_step "Paso 4: Generando plantillas del sistema, overlay y scripts"
+log_step "Paso 3: Generando estructura de overlay, temas y scripts de aprovisionamiento"
 
-# --- 1. Generador de Iconos de Branding (Python) ---
+# --- 1. Generador de Iconos en Python ---
 cat << 'EOF' > "${SCRIPTS_DIR}/generate-branding-icons.py"
 #!/usr/bin/env python3
 import os
@@ -438,12 +367,11 @@ if __name__ == "__main__":
 EOF
 chmod +x "${SCRIPTS_DIR}/generate-branding-icons.py"
 
-# Generar iconos si el source existe
 if [[ -f "${ASSETS_DIR}/Pop!_OS_Icon.png" ]]; then
     python3 "${SCRIPTS_DIR}/generate-branding-icons.py" "${ASSETS_DIR}/Pop!_OS_Icon.png" "${OVERLAY_DIR}" || true
 fi
 
-# --- 2. Overlay: Identificación del Sistema (os-release, issue, lsb-release) ---
+# --- 2. Overlay: Identificación del Sistema y Releases ---
 mkdir -p "${OVERLAY_DIR}/etc"
 cat << 'EOF' > "${OVERLAY_DIR}/etc/os-release"
 NAME="Pop!_OS"
@@ -502,15 +430,10 @@ Components: main restricted universe multiverse
 Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
 EOF
 
-# Descargar llaves de archivo oficiales de Pop!_OS si no existen
-if [[ ! -f "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" ]]; then
-    curl -fsSL --connect-timeout 10 "https://apt.pop-os.org/proprietary/archive.key" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" 2>/dev/null || true
-fi
-if [[ ! -f "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" ]]; then
-    curl -fsSL --connect-timeout 10 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" 2>/dev/null || true
-fi
+curl -fsSL --connect-timeout 10 "https://apt.pop-os.org/proprietary/archive.key" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" 2>/dev/null || true
+curl -fsSL --connect-timeout 10 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" 2>/dev/null || true
 
-# --- 4. Overlay: Configuración de Fuentes (Pixelify Sans por defecto) ---
+# --- 4. Overlay: Configuración de Fuente por Defecto (Pixelify Sans) ---
 mkdir -p "${OVERLAY_DIR}/etc/fonts" "${OVERLAY_DIR}/usr/share/fonts/truetype/pixelify-sans"
 cat << 'EOF' > "${OVERLAY_DIR}/etc/fonts/local.conf"
 <?xml version="1.0"?>
@@ -549,8 +472,8 @@ cat << 'EOF' > "${OVERLAY_DIR}/etc/fonts/local.conf"
 </fontconfig>
 EOF
 
-if [[ -f "${FONT_TARGET}" ]]; then
-    cp -f "${FONT_TARGET}" "${OVERLAY_DIR}/usr/share/fonts/truetype/pixelify-sans/"
+if [[ -f "${FONT_FILE}" ]]; then
+    cp -f "${FONT_FILE}" "${OVERLAY_DIR}/usr/share/fonts/truetype/pixelify-sans/"
 fi
 
 # --- 5. Overlay: Entorno COSMIC Desktop y Fuentes ---
@@ -736,7 +659,7 @@ if [[ -n "${PREMID_XPI}" ]]; then
     cp -f "${PREMID_XPI}" "${OVERLAY_DIR}/usr/lib/firefox/browser/extensions/support@premid.app.xpi"
 fi
 
-# --- 9. Script de Aprovisionamiento Chroot (chroot-setup.sh) ---
+# --- 9. Script de Aprovisionamiento en Chroot (chroot-setup.sh) ---
 cat << 'EOF' > "${SCRIPTS_DIR}/chroot-setup.sh"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -746,12 +669,10 @@ export DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-echo "[CHROOT] Iniciando aprovisionamiento del sistema..."
-
-# 1. Arquitectura de 32-bit (Steam, Wine)
+echo "[CHROOT] Configurando arquitectura i386 para compatibilidad de 32-bit (Steam)..."
 dpkg --add-architecture i386 || true
 
-# 2. Configuración de repositorios
+echo "[CHROOT] Actualizando fuentes APT e instalando certificados..."
 apt-get update -y || apt-get update -y --fix-missing || true
 apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release software-properties-common
 
@@ -759,7 +680,7 @@ add-apt-repository -y universe || true
 add-apt-repository -y multiverse || true
 add-apt-repository -y restricted || true
 
-# VSCodium
+# Repositorio VSCodium
 if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
     mkdir -p /etc/apt/keyrings
     curl -fsSL --connect-timeout 10 "https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg" | gpg --dearmor -o /etc/apt/keyrings/vscodium-archive-keyring.gpg 2>/dev/null || true
@@ -773,19 +694,95 @@ fi
 
 apt-get update -y || apt-get update -y --fix-missing || true
 
-# 3. Desinstalar bloatware no deseado
+# Configurar live boot Casper
+cat << 'EOCASPER' > /etc/casper.conf
+export USERNAME="defokos"
+export USERFULLNAME="DefokOS Live User"
+export HOST="defokos"
+export BUILD_SYSTEM="DefokOS"
+EOCASPER
+
+# Desinstalar bloatware
 echo "[CHROOT] Purgando thunderbird, popsicle, xterm, gnome-terminal..."
 apt-get purge -y thunderbird 'thunderbird-locale-*' popsicle popsicle-gtk xterm gnome-terminal gnome-terminal-data || true
 rm -f /usr/share/applications/thunderbird.desktop /usr/share/applications/popsicle*.desktop /usr/share/applications/*xterm*.desktop /usr/share/applications/org.gnome.Terminal.desktop 2>/dev/null || true
 
-# 4. Instalación de paquetes principales
+# Lista de paquetes nativos esenciales
 APT_PACKAGES=(
-    linux-generic casper systemd systemd-sysv udev sudo locales network-manager net-tools
-    pop-de-cosmic cosmic-session cosmic-store cosmic-term cosmic-edit cosmic-files cosmic-greeter cosmic-app-library
-    mesa-vulkan-drivers mesa-utils vulkan-tools libvulkan1 libgl1-mesa-dri libgl1 libglu1-mesa libegl-mesa0 libglx-mesa0
-    pipewire pipewire-pulse pipewire-alsa pipewire-audio-client-libraries wireplumber pulseaudio-utils pavucontrol audacity sox ffmpeg ladspa-sdk
-    calamares calamares-settings-ubuntu-common
-    kitty fastfetch htop btop neovim tmux git curl wget rsync ripgrep jq tree build-essential codium fuse3
+    # Núcleo del sistema y soporte Live Boot
+    linux-generic
+    casper
+    systemd
+    systemd-sysv
+    udev
+    sudo
+    locales
+    network-manager
+    net-tools
+
+    # Entorno COSMIC Desktop nativo (System76)
+    pop-de-cosmic
+    cosmic-session
+    cosmic-store
+    cosmic-term
+    cosmic-edit
+    cosmic-files
+    cosmic-greeter
+    cosmic-app-library
+
+    # Pila Gráfica: Mesa, Vulkan y OpenGL
+    mesa-vulkan-drivers
+    mesa-utils
+    vulkan-tools
+    libvulkan1
+    libgl1-mesa-dri
+    libgl1
+    libglu1-mesa
+    libegl-mesa0
+    libglx-mesa0
+
+    # Pila de Audio: Pipewire y PulseAudio
+    pipewire
+    pipewire-pulse
+    pipewire-alsa
+    pipewire-audio-client-libraries
+    wireplumber
+    pulseaudio-utils
+    pavucontrol
+    audacity
+    sox
+    ffmpeg
+    ladspa-sdk
+
+    # Herramientas de arranque y particionado
+    grub-pc-bin
+    grub-efi-amd64-bin
+    grub-common
+    shim-signed
+    mtools
+    dosfstools
+
+    # Instalador universal independiente
+    calamares
+    calamares-settings-ubuntu-common
+
+    # Terminal y utilidades modernas
+    kitty
+    fastfetch
+    htop
+    btop
+    neovim
+    tmux
+    git
+    curl
+    wget
+    rsync
+    ripgrep
+    jq
+    tree
+    build-essential
+    codium
+    fuse3
 )
 
 if apt-cache show libfuse2t64 >/dev/null 2>&1; then
@@ -801,9 +798,9 @@ for pkg in "${APT_PACKAGES[@]}"; do
     fi
 done
 
-echo "[CHROOT] Instalando paquetes principales (${#INSTALLABLE[@]} disponibles)..."
+echo "[CHROOT] Instalando componentes principales (${#INSTALLABLE[@]} paquetes)..."
 apt-get install -y --no-install-recommends "${INSTALLABLE[@]}" || {
-    echo "[CHROOT:WARN] Instalando paquete por paquete..."
+    echo "[CHROOT:WARN] Ejecutando instalación resiliente paquete por paquete..."
     for pkg in "${INSTALLABLE[@]}"; do
         apt-get install -y --no-install-recommends "$pkg" || true
     done
@@ -813,7 +810,7 @@ apt-get install -y --no-install-recommends "${INSTALLABLE[@]}" || {
 # Gráficos 32-bit para Steam
 apt-get install -y --no-install-recommends libvulkan1:i386 mesa-vulkan-drivers:i386 || true
 
-# Usuario Live defokos
+# Configuración de usuario Live defokos
 if ! id defokos >/dev/null 2>&1; then
     useradd -m -s /bin/bash -G sudo,audio,video,plugdev,netdev defokos || true
     echo "defokos:defokos" | chpasswd || true
@@ -821,29 +818,33 @@ if ! id defokos >/dev/null 2>&1; then
     chmod 0440 /etc/sudoers.d/defokos
 fi
 
-# 5. Instalación de paquetes .deb locales (YouTube Music, Discord, Steam)
+# Instalar display manager
+systemctl enable cosmic-greeter.service 2>/dev/null || true
+systemctl set-default graphical.target 2>/dev/null || true
+
+# Instalación de paquetes .deb locales (YouTube Music, Discord, Steam)
 DEBS_STAGE="/opt/defokos-packages"
 if [[ -d "${DEBS_STAGE}" ]]; then
     for deb in "${DEBS_STAGE}"/*.deb; do
         if [[ -f "$deb" ]]; then
-            echo "[CHROOT] Instalando $(basename "$deb")..."
+            echo "[CHROOT] Instalando paquete nativo $(basename "$deb")..."
             apt-get install -y --no-install-recommends "$deb" || apt-get install -f -y --no-install-recommends || true
         fi
     done
 fi
 
-# 6. Flatpak
+# Flatpak soporte base
 apt-get install -y --no-install-recommends flatpak || true
 flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 flatpak uninstall --system -y com.discordapp.Discord 2>/dev/null || true
 
-# 7. Permisos PreMiD
+# Permisos PreMiD
 for ext in "/usr/lib/firefox/browser/extensions/support@premid.app.xpi" "/usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/support@premid.app.xpi"; do
     if [[ -f "$ext" ]]; then chmod 644 "$ext" || true; fi
 done
 
-# 8. Limpieza Profunda para asegurar que SquashFS quepa en partición /recovery (límite 4GB FAT32)
-echo "[CHROOT] Purgando runtimes de flatpak y cachés para optimizar tamaño..."
+# Limpieza Profunda para mantener SquashFS por debajo de 3 GB
+echo "[CHROOT] Optimizando y limpiando cachés para compresión compacta..."
 rm -rf /var/lib/flatpak/runtime/* /var/lib/flatpak/app/* /var/lib/flatpak/.removed/* 2>/dev/null || true
 apt-get autoremove -y --purge || true
 apt-get clean -y || true
@@ -852,17 +853,16 @@ find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null || true
 truncate -s 0 /etc/machine-id || true
 rm -f /var/lib/dbus/machine-id 2>/dev/null || true
 
-echo "[CHROOT] Aprovisionamiento completado exitosamente."
+echo "[CHROOT] Aprovisionamiento completado con éxito."
 EOF
 chmod +x "${SCRIPTS_DIR}/chroot-setup.sh"
 
-# --- 10. Script de Aplicación de Tema (apply-theme.sh) ---
+# --- 10. Script de Tema (apply-theme.sh) ---
 cat << 'EOF' > "${SCRIPTS_DIR}/apply-theme.sh"
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[THEME] Aplicando caché de fuentes y configuración visual..."
-
+echo "[THEME] Registrando Pixelify Sans en fc-cache..."
 if command -v fc-cache >/dev/null 2>&1; then
     fc-cache -fv /usr/share/fonts/ 2>/dev/null || true
 fi
@@ -875,77 +875,34 @@ if command -v update-grub >/dev/null 2>&1; then
     update-grub 2>/dev/null || true
 fi
 
-echo "[THEME] Personalización aplicada correctamente."
+echo "[THEME] Tema y fuentes aplicados correctamente."
 EOF
 chmod +x "${SCRIPTS_DIR}/apply-theme.sh"
 
-log_success "Plantillas, scripts y overlay generados exitosamente."
+log_success "Estructura de overlay y scripts dinámicos generados."
 
 # ==============================================================================
-# PASO 5: OBTENCIÓN DE LA IMAGEN ISO BASE POP!_OS 24.04
+# PASO 4: CONSTRUCCIÓN DEL SISTEMA BASE VÍA DEBOOTSTRAP NOBLE (DESDE CERO)
 # ==============================================================================
-if [[ "${PACK_ONLY}" != "true" ]] && [[ "${REPACK}" != "true" ]] && [[ "${BOOTSTRAP}" != "true" ]]; then
-    log_step "Paso 5: Localizando imagen base Pop!_OS 24.04"
+if [[ "${PACK_ONLY}" != "true" ]] && [[ "${REPACK}" != "true" ]]; then
+    log_step "Paso 4: Construyendo el sistema raíz con debootstrap noble (Ubuntu 24.04 LTS)"
 
-    if [[ -n "${LOCAL_BASE_ISO}" ]] && [[ -f "${LOCAL_BASE_ISO}" ]]; then
-        log_info "Utilizando imagen base local: ${LOCAL_BASE_ISO}"
-        BASE_ISO_FILE="${LOCAL_BASE_ISO}"
-    elif [[ -f "${WORK_DIR}/base.iso" ]]; then
-        log_info "Utilizando imagen base en caché: ${WORK_DIR}/base.iso"
-        BASE_ISO_FILE="${WORK_DIR}/base.iso"
-    else
-        log_info "Descargando imagen oficial Pop!_OS 24.04 LTS..."
-        curl -L -C - --fail --progress-bar -o "${WORK_DIR}/base.iso.tmp" "${BASE_ISO_URL}"
-        mv "${WORK_DIR}/base.iso.tmp" "${WORK_DIR}/base.iso"
-        BASE_ISO_FILE="${WORK_DIR}/base.iso"
-        log_success "Descarga de imagen base completada."
-    fi
-
-    # Extracción de la ISO
-    log_info "Extrayendo árbol de archivos y geometría El Torito de la ISO base..."
-    xorriso -indev "${BASE_ISO_FILE}" -report_el_torito as_mkisofs > "${BOOT_OPTS_FILE}" 2>/dev/null || true
-
-    rm -rf "${ISO_EXTRACT_DIR:?}"/* 2>/dev/null || true
-    if mount -o loop,ro "${BASE_ISO_FILE}" "${ISO_MOUNT_DIR}" 2>/dev/null; then
-        rsync -a "${ISO_MOUNT_DIR}/" "${ISO_EXTRACT_DIR}/"
-        umount -lf "${ISO_MOUNT_DIR}" 2>/dev/null || true
-    else
-        xorriso -osirrox on -indev "${BASE_ISO_FILE}" -extract / "${ISO_EXTRACT_DIR}" 2>/dev/null || true
-        chmod -R u+w "${ISO_EXTRACT_DIR}" 2>/dev/null || true
-    fi
-
-    # Localizar SquashFS
-    SQUASHFS_IMAGE=""
-    for cand in "${ISO_EXTRACT_DIR}/casper/filesystem.squashfs" "${ISO_EXTRACT_DIR}"/casper*/filesystem.squashfs "${ISO_EXTRACT_DIR}/live/filesystem.squashfs"; do
-        if [[ -f "$cand" ]]; then SQUASHFS_IMAGE="$(realpath "$cand")"; break; fi
-    done
-
-    if [[ -z "${SQUASHFS_IMAGE}" ]]; then
-        log_err "No se localizó filesystem.squashfs en la ISO base."
-        exit 1
-    fi
-
-    # Descompresión de SquashFS
-    log_info "Descomprimiendo SquashFS en ${CHROOT_DIR}..."
-    rm -rf "${CHROOT_DIR}"
-    unsquashfs -f -d "${CHROOT_DIR}" "${SQUASHFS_IMAGE}"
-    log_success "SquashFS descomprimido limpiamente."
-
-elif [[ "${BOOTSTRAP}" == "true" ]]; then
-    log_step "Paso 5: Construcción base vía debootstrap noble"
     rm -rf "${CHROOT_DIR}"
     mkdir -p "${CHROOT_DIR}"
-    debootstrap --arch=amd64 noble "${CHROOT_DIR}" http://apt.pop-os.org/ubuntu || \
-    debootstrap --arch=amd64 noble "${CHROOT_DIR}" http://archive.ubuntu.com/ubuntu/
-    mkdir -p "${ISO_EXTRACT_DIR}/casper"
-    SQUASHFS_IMAGE="${ISO_EXTRACT_DIR}/casper/filesystem.squashfs"
+
+    log_info "Descargando y construyendo chroot minimal con debootstrap..."
+    if ! debootstrap --arch=amd64 --include=ca-certificates,curl,gnupg noble "${CHROOT_DIR}" http://apt.pop-os.org/ubuntu; then
+        log_warn "Reintentando con mirror oficial de Ubuntu..."
+        debootstrap --arch=amd64 --include=ca-certificates,curl,gnupg noble "${CHROOT_DIR}" http://archive.ubuntu.com/ubuntu/
+    fi
+    log_success "Sistema base debootstrap completado con éxito."
 fi
 
 # ==============================================================================
-# PASO 6: PREPARACIÓN DE CHROOT, BIND MOUNTS Y POLÍTICAS
+# PASO 5: PREPARACIÓN DE MONTURAS VIRTUALES Y DNS EN CHROOT
 # ==============================================================================
 if [[ "${PACK_ONLY}" != "true" ]]; then
-    log_step "Paso 6: Preparando monturas virtuales y DNS en chroot"
+    log_step "Paso 5: Configurando monturas virtuales (/dev, /proc, /sys, /run) y DNS"
 
     rm -f "${CHROOT_DIR}/etc/resolv.conf"
     cat << 'EOF' > "${CHROOT_DIR}/etc/resolv.conf"
@@ -968,38 +925,14 @@ EOF
     mount -t sysfs sysfs "${CHROOT_DIR}/sys"
     mount -t tmpfs tmpfs "${CHROOT_DIR}/run"
 
-    # ==============================================================================
-    # PASO 7: APLICACIÓN DEL OVERLAY Y PERSONALIZACIÓN DE ARRANQUE EN ISO
-    # ==============================================================================
-    log_step "Paso 7: Inyectando overlay en chroot y actualizando menú de la ISO"
-
+    # Inyección de overlay en chroot
+    log_info "Inyectando overlay temático en el chroot..."
     rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
 
-    # Sincronizar fondo, logotipo y título en el menú de la ISO
-    if [[ -d "${ISO_EXTRACT_DIR}/boot/grub/themes/pop" ]]; then
-        if [[ -f "${ASSETS_DIR}/boot_background_1080p.png" ]]; then
-            cp -f "${ASSETS_DIR}/boot_background_1080p.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/background.png"
-        fi
-        if [[ -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" ]]; then
-            cp -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/logo.png"
-        fi
-    fi
-    if [[ -f "${ASSETS_DIR}/splash.bmp" ]]; then
-        cp -f "${ASSETS_DIR}/splash.bmp" "${ISO_EXTRACT_DIR}/splash.bmp" 2>/dev/null || true
-        mkdir -p "${ISO_EXTRACT_DIR}/boot/efi" 2>/dev/null || true
-        cp -f "${ASSETS_DIR}/splash.bmp" "${ISO_EXTRACT_DIR}/boot/efi/splash.bmp" 2>/dev/null || true
-    fi
-    if [[ -f "${ISO_EXTRACT_DIR}/boot/grub/grub.cfg" ]]; then
-        sed -i 's/Try or Install Pop_OS/DefokOS 24.04 LTS (Utane Uta Edition) - COSMIC Desktop/g' "${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
-    fi
-    if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg" ]]; then
-        sed -i 's/default pop-os/default defokos/g; s/label pop-os/label defokos/g' "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
-    fi
-
     # ==============================================================================
-    # PASO 8: EJECUCIÓN DE APROVISIONAMIENTO Y TEMAS DENTRO DEL CHROOT
+    # PASO 6: EJECUCIÓN DE SCRIPTS DE APROVISIONAMIENTO Y COSMIC DESKTOP
     # ==============================================================================
-    log_step "Paso 8: Ejecutando aprovisionamiento y personalización en chroot"
+    log_step "Paso 6: Aprovisionando COSMIC Desktop, Mesa, Vulkan, Pipewire y Apps .deb"
 
     STAGE_SCRIPTS="${CHROOT_DIR}/opt/defokos-build-scripts"
     STAGE_DEBS="${CHROOT_DIR}/opt/defokos-packages"
@@ -1016,12 +949,12 @@ EOF
     chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/apply-theme.sh
 
     rm -rf "${STAGE_SCRIPTS}" "${STAGE_DEBS}"
-    log_success "Aprovisionamiento en chroot finalizado satisfactoriamente."
+    log_success "Aprovisionamiento dentro del chroot completado."
 
     # ==============================================================================
-    # PASO 9: DESMONTAJE Y LIMPIEZA DE CHROOT
+    # PASO 7: DESMONTAJE SEGURO DEL CHROOT
     # ==============================================================================
-    log_step "Paso 9: Desmontando sistemas de archivos virtuales"
+    log_step "Paso 7: Desmontando sistemas de archivos virtuales"
 
     rm -f "${CHROOT_DIR}/usr/sbin/policy-rc.d"
     rm -f "${CHROOT_DIR}/etc/resolv.conf"
@@ -1033,48 +966,151 @@ EOF
     umount -lf "${CHROOT_DIR}/dev/pts" 2>/dev/null || true
     umount -lf "${CHROOT_DIR}/dev" 2>/dev/null || true
     umount -lf "${CHROOT_DIR}" 2>/dev/null || true
+    log_success "Chroot desmontado limpiamente."
+fi
 
-    # ==============================================================================
-    # PASO 10: HIGIENE DE ESPACIO, KERNEL SYNC Y COMPRESIÓN SQUASHFS
-    # ==============================================================================
-    log_step "Paso 10: Comprimiendo nuevo filesystem.squashfs"
+# ==============================================================================
+# PASO 8: PREPARACIÓN DEL ÁRBOL BOOTEABLE LIVE ISO
+# ==============================================================================
+log_step "Paso 8: Estructurando árbol Live (Kernel, Initrd, GRUB y Bootloader UEFI/BIOS)"
 
-    # Determinar ruta de SquashFS
-    if [[ -z "${SQUASHFS_IMAGE:-}" ]]; then
-        for cand in "${ISO_EXTRACT_DIR}/casper/filesystem.squashfs" "${ISO_EXTRACT_DIR}"/casper*/filesystem.squashfs; do
-            if [[ -f "$cand" ]]; then SQUASHFS_IMAGE="$(realpath "$cand")"; break; fi
-        done
-        SQUASHFS_IMAGE="${SQUASHFS_IMAGE:-${ISO_EXTRACT_DIR}/casper/filesystem.squashfs}"
-    fi
-    CASPER_DIR="$(dirname "${SQUASHFS_IMAGE}")"
-    mkdir -p "${CASPER_DIR}"
+mkdir -p "${ISO_EXTRACT_DIR}/casper"
+mkdir -p "${ISO_EXTRACT_DIR}/boot/grub/themes/pop"
+mkdir -p "${ISO_EXTRACT_DIR}/EFI/BOOT"
+mkdir -p "${ISO_EXTRACT_DIR}/isolinux"
 
-    # Limpieza estricta para garantizar que quepa en la partición /recovery (4GB FAT32)
-    rm -rf "${CHROOT_DIR}/var/lib/flatpak/runtime/"* 2>/dev/null || true
-    rm -rf "${CHROOT_DIR}/var/lib/flatpak/app/"* 2>/dev/null || true
-    rm -rf "${CHROOT_DIR}/var/lib/flatpak/.removed/"* 2>/dev/null || true
-    rm -rf "${CHROOT_DIR}/var/cache/apt/archives/"*.deb 2>/dev/null || true
-    rm -rf "${CHROOT_DIR}/var/lib/apt/lists/"* 2>/dev/null || true
-    rm -rf "${CHROOT_DIR}/root/.cache/"* 2>/dev/null || true
+# 1. Sincronizar Kernel e Initramfs desde el chroot
+LATEST_KERNEL=$(ls -t "${CHROOT_DIR}/boot/vmlinuz"* 2>/dev/null | head -n1 || true)
+LATEST_INITRD=$(ls -t "${CHROOT_DIR}/boot/initrd.img"* 2>/dev/null | head -n1 || true)
 
-    # Sincronizar kernel e initrd con el live boot
-    LATEST_KERNEL=$(ls -t "${CHROOT_DIR}/boot/vmlinuz"* 2>/dev/null | head -n1 || true)
-    LATEST_INITRD=$(ls -t "${CHROOT_DIR}/boot/initrd.img"* 2>/dev/null | head -n1 || true)
-    if [[ -n "${LATEST_KERNEL}" ]] && [[ -f "${LATEST_KERNEL}" ]]; then
-        cp -f "${LATEST_KERNEL}" "${CASPER_DIR}/vmlinuz.efi"
-    fi
-    if [[ -n "${LATEST_INITRD}" ]] && [[ -f "${LATEST_INITRD}" ]]; then
-        cp -f "${LATEST_INITRD}" "${CASPER_DIR}/initrd.gz"
-    fi
+if [[ -z "${LATEST_KERNEL}" ]] || [[ -z "${LATEST_INITRD}" ]]; then
+    log_err "No se encontró el kernel o initrd en ${CHROOT_DIR}/boot/."
+    exit 1
+fi
 
-    # Actualizar metadata
-    printf $(du -sx --block-size=1 "${CHROOT_DIR}" | cut -f1) > "${CASPER_DIR}/filesystem.size"
-    chroot "${CHROOT_DIR}" dpkg-query -W --showformat='${Package} ${Version}\n' > "${CASPER_DIR}/filesystem.manifest" 2>/dev/null || true
-    cp -f "${CASPER_DIR}/filesystem.manifest" "${CASPER_DIR}/filesystem.manifest-desktop" 2>/dev/null || true
+log_info "Copiando kernel: $(basename "${LATEST_KERNEL}")..."
+cp -f "${LATEST_KERNEL}" "${ISO_EXTRACT_DIR}/casper/vmlinuz"
 
-    rm -f "${SQUASHFS_IMAGE}"
-    log_info "Comprimiendo SquashFS con ${COMPRESSION} (nivel máximo de compresión)..."
-    MKSQUASHFS_OPTS=(-noappend -b 1048576 -no-recovery -always-use-fragments)
+log_info "Copiando initrd: $(basename "${LATEST_INITRD}")..."
+cp -f "${LATEST_INITRD}" "${ISO_EXTRACT_DIR}/casper/initrd"
+
+# 2. Generación del binario EFI (BOOTX64.EFI) con GRUB standalone
+log_info "Compilando binario de arranque UEFI con GRUB standalone..."
+cat << 'EOF' > "${WORK_DIR}/grub-embedded.cfg"
+search --file --set=root /casper/vmlinuz
+set prefix=($root)/boot/grub
+source $prefix/grub.cfg
+EOF
+
+if command -v grub-mkstandalone >/dev/null 2>&1; then
+    grub-mkstandalone \
+        --format=x86_64-efi \
+        --output="${ISO_EXTRACT_DIR}/EFI/BOOT/BOOTX64.EFI" \
+        --locales="" \
+        --fonts="" \
+        "boot/grub/grub.cfg=${WORK_DIR}/grub-embedded.cfg"
+else
+    chroot "${CHROOT_DIR}" grub-mkstandalone \
+        --format=x86_64-efi \
+        --output="/boot/bootx64.efi" \
+        --locales="" \
+        --fonts="" \
+        "boot/grub/grub.cfg=${WORK_DIR}/grub-embedded.cfg"
+    cp -f "${CHROOT_DIR}/boot/bootx64.efi" "${ISO_EXTRACT_DIR}/EFI/BOOT/BOOTX64.EFI"
+fi
+
+# 3. Creación de imagen de partición EFI efi.img para El Torito
+log_info "Generando imagen FAT efi.img para arranque UEFI El Torito..."
+dd if=/dev/zero of="${ISO_EXTRACT_DIR}/boot/grub/efi.img" bs=1k count=8192 status=none
+mkfs.vfat -F 12 "${ISO_EXTRACT_DIR}/boot/grub/efi.img" >/dev/null
+mmd -i "${ISO_EXTRACT_DIR}/boot/grub/efi.img" ::/EFI ::/EFI/BOOT
+mcopy -i "${ISO_EXTRACT_DIR}/boot/grub/efi.img" "${ISO_EXTRACT_DIR}/EFI/BOOT/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
+
+# 4. Configuración de Menú de Arranque GRUB (grub.cfg)
+cat << 'EOF' > "${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
+set timeout=10
+set default=0
+
+insmod font
+insmod efi_gop
+insmod efi_uga
+insmod gfxterm
+insmod png
+insmod gfxmenu
+
+terminal_output gfxterm
+
+if [ -f /boot/grub/themes/pop/background.png ]; then
+    background_image /boot/grub/themes/pop/background.png
+fi
+
+menuentry "DefokOS 24.04 LTS (Utane Uta Edition) - COSMIC Desktop" --class defokos --class pop-os {
+    set gfxpayload=keep
+    linux /casper/vmlinuz boot=casper quiet splash ---
+    initrd /casper/initrd
+}
+
+menuentry "DefokOS 24.04 LTS (Safe Graphics)" {
+    set gfxpayload=keep
+    linux /casper/vmlinuz boot=casper nomodeset quiet splash ---
+    initrd /casper/initrd
+}
+EOF
+
+# 5. Configuración de Cargador BIOS tradicional con ISOLINUX
+if [[ -f /usr/lib/ISOLINUX/isolinux.bin ]]; then
+    cp -f /usr/lib/ISOLINUX/isolinux.bin "${ISO_EXTRACT_DIR}/isolinux/"
+    cp -f /usr/lib/syslinux/modules/bios/*.c32 "${ISO_EXTRACT_DIR}/isolinux/" 2>/dev/null || true
+
+    cat << 'EOF' > "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
+UI vesamenu.c32
+TIMEOUT 100
+PROMPT 0
+
+MENU TITLE DefokOS 24.04 LTS (Utane Uta Edition)
+MENU COLOR border       30;44   #40ffffff #a0000000 std
+MENU COLOR title        1;36;44 #90b49fcc #a0000000 std
+MENU COLOR sel          7;37;40 #e0ffffff #20ffffff all
+MENU COLOR unsel        37;44   #50ffffff #a0000000 none
+
+LABEL live
+  MENU LABEL ^Probar o Instalar DefokOS 24.04 (COSMIC Desktop)
+  KERNEL /casper/vmlinuz
+  APPEND initrd=/casper/initrd boot=casper quiet splash ---
+
+LABEL safe
+  MENU LABEL ^DefokOS 24.04 (Graficos Seguros / Safe Graphics)
+  KERNEL /casper/vmlinuz
+  APPEND initrd=/casper/initrd boot=casper nomodeset quiet splash ---
+EOF
+fi
+
+# 6. Sincronizar fondos y logos en el árbol de arranque de la ISO
+if [[ -f "${ASSETS_DIR}/boot_background_1080p.png" ]]; then
+    cp -f "${ASSETS_DIR}/boot_background_1080p.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/background.png"
+fi
+if [[ -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" ]]; then
+    cp -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/logo.png"
+fi
+if [[ -f "${ASSETS_DIR}/splash.bmp" ]]; then
+    cp -f "${ASSETS_DIR}/splash.bmp" "${ISO_EXTRACT_DIR}/splash.bmp"
+fi
+
+# ==============================================================================
+# PASO 9: COMPRESIÓN SQUASHFS DEL SISTEMA DE ARCHIVOS
+# ==============================================================================
+if [[ "${PACK_ONLY}" != "true" ]]; then
+    log_step "Paso 9: Comprimiendo filesystem.squashfs con compresión ${COMPRESSION}"
+
+    SQUASHFS_FILE="${ISO_EXTRACT_DIR}/casper/filesystem.squashfs"
+    rm -f "${SQUASHFS_FILE}"
+
+    # Metadata de la imagen
+    printf $(du -sx --block-size=1 "${CHROOT_DIR}" | cut -f1) > "${ISO_EXTRACT_DIR}/casper/filesystem.size"
+    chroot "${CHROOT_DIR}" dpkg-query -W --showformat='${Package} ${Version}\n' > "${ISO_EXTRACT_DIR}/casper/filesystem.manifest" 2>/dev/null || true
+    cp -f "${ISO_EXTRACT_DIR}/casper/filesystem.manifest" "${ISO_EXTRACT_DIR}/casper/filesystem.manifest-desktop" 2>/dev/null || true
+
+    MKSQUASHFS_OPTS=(-noappend -b 1048576 -always-use-fragments)
     if [[ "${COMPRESSION}" == "zstd" ]]; then
         MKSQUASHFS_OPTS+=(-comp zstd -Xcompression-level 19)
     elif [[ "${COMPRESSION}" == "xz" ]]; then
@@ -1083,7 +1119,8 @@ EOF
         MKSQUASHFS_OPTS+=(-comp gzip)
     fi
 
-    mksquashfs "${CHROOT_DIR}" "${SQUASHFS_IMAGE}" "${MKSQUASHFS_OPTS[@]}"
+    log_info "Generando filesystem.squashfs (esto puede tardar unos minutos)..."
+    mksquashfs "${CHROOT_DIR}" "${SQUASHFS_FILE}" "${MKSQUASHFS_OPTS[@]}"
     log_success "filesystem.squashfs generado exitosamente."
 
     (
@@ -1094,25 +1131,12 @@ EOF
 fi
 
 # ==============================================================================
-# PASO 11: CREACIÓN DE ISO HÍBRIDA BOOTEABLE CON XORRISO
+# PASO 10: CREACIÓN DE ISO HÍBRIDA BOOTEABLE CON XORRISO
 # ==============================================================================
-log_step "Paso 11: Empaquetando ISO híbrida booteable (UEFI + BIOS) con xorriso"
+log_step "Paso 10: Creando imagen ISO híbrida (UEFI + BIOS) con xorriso"
 
 FINAL_ISO_PATH="${OUT_DIR}/${ISO_OUTPUT_NAME}"
 rm -f "${FINAL_ISO_PATH}"
-
-EFI_IMG=""
-for cand in \
-    "boot/grub/efi.img" \
-    "EFI/boot/efi.img" \
-    "EFI/boot/bootx64.efi" \
-    "efi/boot/bootx64.efi" \
-    "efi/boot/efi.img"; do
-    if [[ -f "${ISO_EXTRACT_DIR}/${cand}" ]]; then
-        EFI_IMG="${cand}"
-        break
-    fi
-done
 
 XORRISO_ARGS=(
     -as mkisofs
@@ -1122,8 +1146,7 @@ XORRISO_ARGS=(
     -J -l
 )
 
-if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.bin" ]] && [[ -f "${ISO_EXTRACT_DIR}/isolinux/boot.cat" ]]; then
-    log_info "Añadiendo soporte de arranque ISOLINUX tradicional..."
+if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.bin" ]]; then
     XORRISO_ARGS+=(
         -b isolinux/isolinux.bin
         -c isolinux/boot.cat
@@ -1133,26 +1156,17 @@ if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.bin" ]] && [[ -f "${ISO_EXTRACT_D
     )
 fi
 
-if [[ -n "${EFI_IMG}" ]]; then
-    log_info "Añadiendo soporte de arranque UEFI con imagen: ${EFI_IMG}"
+if [[ -f "${ISO_EXTRACT_DIR}/boot/grub/efi.img" ]]; then
     XORRISO_ARGS+=(
         -eltorito-alt-boot
-        -e "${EFI_IMG}"
+        -e boot/grub/efi.img
         -no-emul-boot
         -boot-load-size 8192
         -isohybrid-gpt-basdat
     )
 fi
 
-if [[ -n "${BASE_ISO_FILE}" ]] && [[ -f "${BASE_ISO_FILE}" ]]; then
-    log_info "Inyectando código de arranque MBR híbrido desde la ISO base..."
-    XORRISO_ARGS+=(
-        -isohybrid-mbr "--interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:${BASE_ISO_FILE}"
-        --mbr-force-bootable
-        -partition_cyl_align off
-    )
-elif [[ -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]]; then
-    log_info "Inyectando código de arranque MBR híbrido estándar (isohdpfx.bin)..."
+if [[ -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]]; then
     XORRISO_ARGS+=(
         -isohybrid-mbr "/usr/lib/ISOLINUX/isohdpfx.bin"
         --mbr-force-bootable
@@ -1166,9 +1180,9 @@ fi
 )
 
 # ==============================================================================
-# PASO 12: GENERACIÓN DE CHECKSUMS Y REPORTE FINAL
+# PASO 11: CHECKSUMS Y REPORTE FINAL
 # ==============================================================================
-log_step "Paso 12: Generando checksums criptográficos"
+log_step "Paso 11: Generando checksums criptográficos"
 
 (
     cd "${OUT_DIR}"
@@ -1179,7 +1193,7 @@ ISO_SIZE="$(du -h "${FINAL_ISO_PATH}" | cut -f1)"
 SHA256_HASH="$(cut -d' ' -f1 "${FINAL_ISO_PATH}.sha256")"
 
 echo -e "\n${C_BOLD}${C_LAVENDER}======================================================================${C_RESET}"
-echo -e "${C_BOLD}${C_GREEN}  ¡CONSTRUCCIÓN DE DEFOKOS COMPLETADA EXITOSAMENTE!${C_RESET}"
+echo -e "${C_BOLD}${C_GREEN}  ¡CONSTRUCCIÓN DE DEFOKOS DESDE CERO COMPLETADA EXITOSAMENTE!${C_RESET}"
 echo -e "${C_BOLD}${C_LAVENDER}======================================================================${C_RESET}"
 echo -e "${C_BOLD}Archivo ISO:     ${C_CYAN}${FINAL_ISO_PATH}${C_RESET}"
 echo -e "${C_BOLD}Tamaño:          ${C_CYAN}${ISO_SIZE}${C_RESET}"
