@@ -101,6 +101,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 COMPRESSION="${COMPRESSION:-zstd}"
+BASE_ISO_FILE="${LOCAL_BASE_ISO:-${WORK_DIR}/base.iso}"
+BOOT_OPTS_FILE="${WORK_DIR}/el_torito_opts.txt"
 
 # --- Manejador de Limpieza y Salida Segura (Trap) ---
 cleanup_mounts() {
@@ -182,7 +184,6 @@ else
 # ==============================================================================
 log_step "Paso 3: Localizando o descargando la ISO base de Pop!_OS"
 
-BASE_ISO_FILE="${WORK_DIR}/base.iso"
 NEED_DOWNLOAD=false
 
 # 1. Si el usuario especificó una ISO local con --iso
