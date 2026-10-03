@@ -221,6 +221,7 @@ if [[ -n "${BG_FOUND}" ]]; then
     cp -f "${BG_FOUND}" "${ASSETS_DIR}/systemd_defoko_background.jpeg"
     ffmpeg -y -i "${BG_FOUND}" -vf "scale=1920:1080" "${ASSETS_DIR}/boot_background_1080p.png" 2>/dev/null || true
     ffmpeg -y -i "${BG_FOUND}" -vf "scale=1920:1080" -pix_fmt bgr24 "${ASSETS_DIR}/splash.bmp" 2>/dev/null || true
+    ffmpeg -y -i "${BG_FOUND}" -vf "scale=640:480" "${ASSETS_DIR}/isolinux_splash.png" 2>/dev/null || true
 fi
 
 # 3. Fuente Pixelify Sans
@@ -555,6 +556,58 @@ echo '"DefokOS-Lavender"' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76
 echo 'Some((red: 0.7058824, green: 0.6235294, blue: 0.8))' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Dark/v1/accent"
 echo 'true' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark"
 
+# COSMIC Dock Favorites (Inyectar instalador al inicio del dock)
+mkdir -p "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicAppList/v1" \
+         "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicAppList/v1"
+
+cat << 'EOF' > "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicAppList/v1/favorites"
+[
+    "io.calamares.calamares",
+    "firefox",
+    "com.system76.CosmicFiles",
+    "com.system76.CosmicTerm",
+    "com.system76.CosmicStore",
+    "com.system76.CosmicSettings",
+]
+EOF
+cp -f "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicAppList/v1/favorites" "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicAppList/v1/favorites"
+
+# Fondo de Pantalla COSMIC Desktop
+mkdir -p "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicBackground/v1" \
+         "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicBackground/v1" \
+         "${OVERLAY_DIR}/usr/share/backgrounds/cosmic"
+
+cat << 'EOF' > "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicBackground/v1/all"
+(
+    output: "all",
+    source: Path("/usr/share/backgrounds/systemd_defoko_background.jpeg"),
+    filter_by_theme: false,
+    rotation_frequency: 0,
+    filter_method: Lanczos,
+    scaling_mode: Zoom,
+    sampling_method: Alphanumeric,
+)
+EOF
+cp -f "${OVERLAY_DIR}/usr/share/cosmic/com.system76.CosmicBackground/v1/all" "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicBackground/v1/all"
+
+# Greetd: Autologin directo al entorno COSMIC para la sesión Live
+mkdir -p "${OVERLAY_DIR}/etc/greetd"
+cat << 'EOF' > "${OVERLAY_DIR}/etc/greetd/cosmic-greeter.toml"
+[terminal]
+vt = "1"
+
+[general]
+service = "cosmic-greeter"
+
+[initial_session]
+command = "cosmic-session"
+user = "defokos"
+
+[default_session]
+command = "cosmic-greeter-start"
+user = "cosmic-greeter"
+EOF
+
 # --- 6. Overlay: Gestor de Arranque y Fondos (systemd-boot + GRUB) ---
 mkdir -p "${OVERLAY_DIR}/boot/efi/loader" "${OVERLAY_DIR}/boot/grub/themes/pop" "${OVERLAY_DIR}/etc/default/grub.d" "${OVERLAY_DIR}/etc/kernel/postinst.d"
 mkdir -p "${OVERLAY_DIR}/usr/share/backgrounds"
@@ -606,14 +659,26 @@ if [[ -f "${ASSETS_DIR}/systemd_defoko_background.jpeg" ]]; then
 fi
 
 # --- 7. Overlay: Instalador Universal Calamares ---
-mkdir -p "${OVERLAY_DIR}/etc/calamares/branding/defokos" "${OVERLAY_DIR}/usr/share/applications"
+mkdir -p "${OVERLAY_DIR}/etc/calamares/modules" \
+         "${OVERLAY_DIR}/etc/calamares/branding/defokos" \
+         "${OVERLAY_DIR}/usr/share/applications" \
+         "${OVERLAY_DIR}/etc/skel/Desktop" \
+         "${OVERLAY_DIR}/etc/xdg/autostart" \
+         "${OVERLAY_DIR}/usr/local/bin"
+
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/settings.conf"
 ---
-modules-search: [ local ]
+modules-search:
+  - /usr/lib/x86_64-linux-gnu/calamares/modules
+  - /usr/share/calamares/modules
+  - /usr/lib/calamares/modules
+  - local
+
 instances:
 - id:       defokos
   module:   branding
   config:   branding.desc
+
 sequence:
 - show:
   - welcome
@@ -641,6 +706,7 @@ sequence:
   - umount
 - show:
   - finished
+
 branding: defokos
 prompt-install: true
 dont-chroot: false
@@ -649,6 +715,102 @@ disable-cancel: false
 disable-cancel-during-exec: false
 hide-back-and-next-during-exec: false
 quit-at-end: false
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/unpackfs.conf"
+---
+unpack:
+    -   source: "/cdrom/casper/filesystem.squashfs"
+        sourcefs: "squashfs"
+        destination: ""
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/welcome.conf"
+---
+showSupportUrl:         true
+showKnownIssuesUrl:     false
+showReleaseNotesUrl:    false
+
+requirements:
+    requiredStorage:    8.0
+    requiredRam:        1.0
+
+    check:
+        - storage
+        - ram
+        - power
+        - root
+    required:
+        - root
+        - storage
+        - ram
+
+geoip:
+    style:  "none"
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/partition.conf"
+---
+efiSystemPartition: "/boot/efi"
+userSwapChoices:
+    - none
+    - file
+initialSwapChoice: file
+drawNestedPartitions: true
+defaultFileSystemType: "ext4"
+availableFileSystemTypes: ["ext4", "btrfs"]
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/users.conf"
+---
+doAutologin: false
+setRootPassword: false
+sudoersGroup: sudo
+defaultGroups:
+    - adm
+    - cdrom
+    - dip
+    - lpadmin
+    - plugdev
+    - sudo
+    - audio
+    - video
+    - netdev
+passwordRequirements:
+    minLength: 1
+    maxLength: -1
+user:
+  shell: /bin/bash
+  forbidden_names: [ root ]
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/displaymanager.conf"
+---
+displaymanagers:
+  - cosmic-greeter
+  - greetd
+
+defaultDesktopEnvironment:
+    executable: "cosmic-session"
+    desktopFile: "cosmic"
+
+basicSetup: false
+sysconfigSetup: false
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/networkcfg.conf"
+---
+type: "nm"
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/hwclock.conf"
+---
+setUtc: true
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/initramfs.conf"
+---
+kernel: ""
 EOF
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/branding/defokos/branding.desc"
@@ -682,6 +844,57 @@ style:
    SidebarTextHighlight: "#b49fcc"
 EOF
 
+if [[ -f "${ASSETS_DIR}/boot_background_1080p.png" ]]; then
+    cp -f "${ASSETS_DIR}/boot_background_1080p.png" "${OVERLAY_DIR}/etc/calamares/branding/defokos/welcome.png"
+elif [[ -f "${OVERLAY_DIR}/etc/calamares/branding/defokos/logo.png" ]]; then
+    cp -f "${OVERLAY_DIR}/etc/calamares/branding/defokos/logo.png" "${OVERLAY_DIR}/etc/calamares/branding/defokos/welcome.png"
+fi
+
+# Script lanzador resiliente para Wayland / Xwayland
+cat << 'EOF' > "${OVERLAY_DIR}/usr/local/bin/calamares-launch"
+#!/usr/bin/env bash
+# ==============================================================================
+# DEFOKOS LIVE INSTALLER LAUNCHER (Calamares)
+# ==============================================================================
+set -e
+
+# Permitir conexiones al servidor X/Xwayland desde root
+if command -v xhost >/dev/null 2>&1; then
+    xhost +si:localuser:root 2>/dev/null || xhost + 2>/dev/null || true
+fi
+
+# Detectar y asegurar montaje del medio live en /cdrom
+if [ ! -f /cdrom/casper/filesystem.squashfs ]; then
+    for cand in /run/initramfs/cdrom /media/cdrom /mnt/cdrom /run/casper*; do
+        if [ -f "$cand/casper/filesystem.squashfs" ]; then
+            mkdir -p /cdrom
+            mount --bind "$cand" /cdrom 2>/dev/null || ln -sfn "$cand" /cdrom 2>/dev/null || true
+            break
+        fi
+    done
+fi
+
+export DISPLAY="${DISPLAY:-:0}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+if [ -n "${WAYLAND_DISPLAY}" ] && [ -e "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]; then
+    chmod 666 "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" 2>/dev/null || true
+fi
+
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+
+exec sudo -E env \
+    DISPLAY="${DISPLAY}" \
+    WAYLAND_DISPLAY="${WAYLAND_DISPLAY}" \
+    XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+    QT_QPA_PLATFORM="${QT_QPA_PLATFORM}" \
+    /usr/bin/calamares -d "$@"
+EOF
+chmod +x "${OVERLAY_DIR}/usr/local/bin/calamares-launch"
+
+# Desktop Entry y Autostart
 cat << 'EOF' > "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop"
 [Desktop Entry]
 Type=Application
@@ -689,12 +902,16 @@ Version=1.0
 Name=Install DefokOS
 GenericName=Live System Installer
 Comment=Install DefokOS 24.04 LTS (Utane Uta Edition) to disk
-Exec=sh -c "pkexec calamares"
+Exec=/usr/local/bin/calamares-launch
 Icon=distributor-logo-pop-os
 Terminal=false
 StartupNotify=true
 Categories=System;
 EOF
+
+cp -f "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop" "${OVERLAY_DIR}/etc/skel/Desktop/install-defokos.desktop"
+chmod +x "${OVERLAY_DIR}/etc/skel/Desktop/install-defokos.desktop"
+cp -f "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop" "${OVERLAY_DIR}/etc/xdg/autostart/io.calamares.calamares.desktop"
 
 # --- 8. Overlay: Extensión PreMiD para Firefox ---
 mkdir -p "${OVERLAY_DIR}/etc/firefox/policies" "${OVERLAY_DIR}/usr/lib/firefox/distribution"
@@ -845,6 +1062,9 @@ APT_PACKAGES=(
     # Instalador universal independiente
     calamares
     calamares-settings-ubuntu-common
+    gparted
+    x11-xserver-utils
+    policykit-1-gnome
 
     # Terminal y utilidades modernas
     kitty
@@ -892,11 +1112,23 @@ apt-get install -y --no-install-recommends libvulkan1:i386 mesa-vulkan-drivers:i
 
 # Configuración de usuario Live defokos
 if ! id defokos >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -G sudo,audio,video,plugdev,netdev defokos || true
+    useradd -m -s /bin/bash -G sudo,audio,video,render,input,plugdev,netdev defokos || true
     echo "defokos:defokos" | chpasswd || true
     echo "defokos ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/defokos
     chmod 0440 /etc/sudoers.d/defokos
+else
+    usermod -aG sudo,audio,video,render,input,plugdev,netdev defokos || true
 fi
+
+# Copiar acceso directo al instalador en el Escritorio del usuario Live
+mkdir -p /etc/skel/Desktop /home/defokos/Desktop
+if [ -f /usr/share/applications/io.calamares.calamares.desktop ]; then
+    cp -f /usr/share/applications/io.calamares.calamares.desktop /etc/skel/Desktop/install-defokos.desktop
+    cp -f /usr/share/applications/io.calamares.calamares.desktop /home/defokos/Desktop/install-defokos.desktop
+    chmod +x /etc/skel/Desktop/install-defokos.desktop /home/defokos/Desktop/install-defokos.desktop 2>/dev/null || true
+    chown -R defokos:defokos /home/defokos/Desktop 2>/dev/null || true
+fi
+chmod +x /usr/local/bin/calamares-launch 2>/dev/null || true
 
 # Instalar display manager
 systemctl enable cosmic-greeter.service 2>/dev/null || true
@@ -949,6 +1181,10 @@ fi
 
 if command -v glib-compile-schemas >/dev/null 2>&1; then
     glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true
+fi
+
+if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+    plymouth-set-default-theme -R spinner 2>/dev/null || plymouth-set-default-theme -R pop-basic 2>/dev/null || true
 fi
 
 if command -v update-grub >/dev/null 2>&1; then
@@ -1142,12 +1378,17 @@ if [[ -f /usr/lib/ISOLINUX/isolinux.bin ]]; then
     cp -f /usr/lib/ISOLINUX/isolinux.bin "${ISO_EXTRACT_DIR}/isolinux/"
     cp -f /usr/lib/syslinux/modules/bios/*.c32 "${ISO_EXTRACT_DIR}/isolinux/" 2>/dev/null || true
 
+    if [[ -f "${ASSETS_DIR}/isolinux_splash.png" ]]; then
+        cp -f "${ASSETS_DIR}/isolinux_splash.png" "${ISO_EXTRACT_DIR}/isolinux/splash.png"
+    fi
+
     cat << 'EOF' > "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 UI vesamenu.c32
 TIMEOUT 100
 PROMPT 0
 
 MENU TITLE DefokOS 24.04 LTS (Utane Uta Edition)
+MENU BACKGROUND splash.png
 MENU COLOR border       30;44   #40ffffff #a0000000 std
 MENU COLOR title        1;36;44 #90b49fcc #a0000000 std
 MENU COLOR sel          7;37;40 #e0ffffff #20ffffff all
