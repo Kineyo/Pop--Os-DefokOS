@@ -64,18 +64,29 @@ BASE_ISO_URL="${BASE_ISO_URL:-${DEFAULT_BASE_URL}}"
 DATE_TAG="$(date +%Y%m%d)"
 DEFOKOS_VERSION="24.04"
 ISO_OUTPUT_NAME="DefokOS-${DEFOKOS_VERSION}-amd64-${DATE_TAG}.iso"
-VOLUME_LABEL="DefokOS_${DEFOKOS_VERSION}_amd64"
+VOLUME_LABEL="DEFOKOS_24_04"
 
-# Parámetro opcional: ruta a ISO base local (para evitar descarga)
+# Parámetros opcionales
 LOCAL_BASE_ISO=""
+PACK_ONLY=false
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --iso)
             LOCAL_BASE_ISO="$2"
             shift 2
             ;;
+        --pack-only)
+            PACK_ONLY=true
+            shift
+            ;;
         --help|-h)
-            echo "Uso: sudo $0 [--iso /ruta/a/base.iso]"
+            echo "Uso: sudo $0 [--iso /ruta/a/base.iso] [--pack-only]"
+            echo ""
+            echo "Opciones:"
+            echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
+            echo "  --pack-only             Omite aprovisionamiento y empaqueta la ISO directamente con xorriso"
+            echo "                          (útil si el SquashFS ya fue generado previamente)"
             echo ""
             echo "Variables de entorno opcionales:"
             echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso"
@@ -155,6 +166,16 @@ log_step "Paso 2: Preparando espacio de trabajo"
 mkdir -p "${WORK_DIR}" "${OUT_DIR}" "${ISO_MOUNT_DIR}" "${ISO_EXTRACT_DIR}"
 log_info "Directorio de trabajo: ${WORK_DIR}"
 log_info "Directorio de salida:   ${OUT_DIR}"
+
+if [[ "${PACK_ONLY}" == "true" ]]; then
+    log_info "Modo --pack-only activado."
+    log_info "Omitiendo descarga, aprovisionamiento chroot y compresión de SquashFS."
+    if [[ ! -d "${ISO_EXTRACT_DIR}" ]]; then
+        log_err "No se encontró el directorio extraído: ${ISO_EXTRACT_DIR}."
+        log_err "Debes ejecutar una compilación completa al menos una vez antes de usar --pack-only."
+        exit 1
+    fi
+else
 
 # ==============================================================================
 # PASO 3: OBTENCIÓN DE LA ISO BASE
@@ -425,6 +446,7 @@ log_info "Regenerando md5sum.txt para el instalador live..."
     find . -type f ! -path "./md5sum.txt" ! -path "./boot.catalog" -exec md5sum {} + > md5sum.txt
 )
 log_success "md5sum.txt actualizado."
+fi
 
 # ==============================================================================
 # PASO 11: RECONSTRUCCIÓN DE LA ISO HÍBRIDA BOOTEABLE CON XORRISO
@@ -473,27 +495,26 @@ if [[ -n "${EFI_IMG}" ]]; then
         -eltorito-alt-boot
         -e "${EFI_IMG}"
         -no-emul-boot
+        -boot-load-size 8192
         -isohybrid-gpt-basdat
     )
 fi
 
-# Fallback si el_torito_opts.txt tiene argumentos válidos
-if [[ -s "${BOOT_OPTS_FILE}" ]] && grep -q "\-b" "${BOOT_OPTS_FILE}"; then
-    log_info "Utilizando parámetros originales extraídos de la ISO base..."
-    # Ejecución utilizando el árbol de la ISO extraída
-    (
-        cd "${ISO_EXTRACT_DIR}"
-        # Leer opciones del archivo descartando rutas absolutas no pertinentes
-        RAW_OPTS=$(cat "${BOOT_OPTS_FILE}" | sed -e 's/xorriso -as mkisofs //' -e "s/-o '[^']*'//")
-        xorriso -as mkisofs -r -V "${VOLUME_LABEL}" -o "${FINAL_ISO_PATH}" ${RAW_OPTS} .
-    )
-else
-    log_info "Empaquetando con configuración híbrida estándar..."
-    (
-        cd "${ISO_EXTRACT_DIR}"
-        xorriso "${XORRISO_ARGS[@]}" .
+# Inyección de código de arranque MBR híbrido si se dispone de la base
+if [[ -f "${BASE_ISO_FILE}" ]]; then
+    log_info "Inyectando código de arranque MBR híbrido desde la ISO base..."
+    XORRISO_ARGS+=(
+        -isohybrid-mbr "--interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:${BASE_ISO_FILE}"
+        --mbr-force-bootable
+        -partition_cyl_align off
     )
 fi
+
+log_info "Empaquetando imagen ISO híbrida booteable con xorriso..."
+(
+    cd "${ISO_EXTRACT_DIR}"
+    xorriso "${XORRISO_ARGS[@]}" .
+)
 
 # ==============================================================================
 # PASO 12: GENERACIÓN DE CHECKSUMS Y REPORTE FINAL
