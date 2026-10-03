@@ -401,7 +401,7 @@ if [[ -f "${ASSETS_DIR}/Pop!_OS_Icon.png" ]]; then
 fi
 
 # --- 2. Overlay: Identificación del Sistema y Releases ---
-mkdir -p "${OVERLAY_DIR}/etc"
+mkdir -p "${OVERLAY_DIR}/etc" "${OVERLAY_DIR}/usr/lib"
 cat << 'EOF' > "${OVERLAY_DIR}/etc/os-release"
 NAME="Pop!_OS"
 PRETTY_NAME="DefokOS 24.04 LTS (Utane Uta Edition)"
@@ -420,6 +420,7 @@ PRIVACY_POLICY_URL="https://github.com/defokos"
 BUILD_ID="rolling"
 LOGO="distributor-logo-pop-os"
 EOF
+cp -f "${OVERLAY_DIR}/etc/os-release" "${OVERLAY_DIR}/usr/lib/os-release"
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/lsb-release"
 DISTRIB_ID=Pop
@@ -428,8 +429,26 @@ DISTRIB_CODENAME=noble
 DISTRIB_DESCRIPTION="DefokOS 24.04 LTS (Utane Uta Edition)"
 EOF
 
-echo "DefokOS 24.04 LTS \n \l" > "${OVERLAY_DIR}/etc/issue"
-echo "DefokOS 24.04 LTS" > "${OVERLAY_DIR}/etc/issue.net"
+echo "defokos" > "${OVERLAY_DIR}/etc/hostname"
+cat << 'EOF' > "${OVERLAY_DIR}/etc/hosts"
+127.0.0.1   localhost
+127.0.1.1   defokos
+::1         localhost ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+EOF
+
+echo -e "DefokOS 24.04 LTS (Utane Uta Edition) \\n \\l" > "${OVERLAY_DIR}/etc/issue"
+echo "DefokOS 24.04 LTS (Utane Uta Edition)" > "${OVERLAY_DIR}/etc/issue.net"
+echo "DefokOS 24.04 LTS (Utane Uta Edition) // COSMIC Desktop Wayland" > "${OVERLAY_DIR}/etc/motd"
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/casper.conf"
+export USERNAME="defokos"
+export USERFULLNAME="DefokOS Live User"
+export HOST="defokos"
+export BUILD_SYSTEM="DefokOS"
+export FLAVOUR="DefokOS"
+EOF
 
 # --- 3. Overlay: Repositorios Oficiales de System76 y Llaves GPG ---
 mkdir -p "${OVERLAY_DIR}/etc/apt/sources.list.d" "${OVERLAY_DIR}/etc/apt/trusted.gpg.d"
@@ -1130,6 +1149,18 @@ if [ -f /usr/share/applications/io.calamares.calamares.desktop ]; then
 fi
 chmod +x /usr/local/bin/calamares-launch 2>/dev/null || true
 
+# Configuración definitiva de Casper para live boot y hostname
+cat << 'EOCASPER' > /etc/casper.conf
+export USERNAME="defokos"
+export USERFULLNAME="DefokOS Live User"
+export HOST="defokos"
+export BUILD_SYSTEM="DefokOS"
+export FLAVOUR="DefokOS"
+EOCASPER
+
+echo "defokos" > /etc/hostname
+cp -f /etc/os-release /usr/lib/os-release 2>/dev/null || true
+
 # Instalar display manager
 systemctl enable cosmic-greeter.service 2>/dev/null || true
 systemctl set-default graphical.target 2>/dev/null || true
@@ -1362,13 +1393,13 @@ fi
 
 menuentry "DefokOS 24.04 LTS (Utane Uta Edition) - COSMIC Desktop" --class defokos --class pop-os {
     set gfxpayload=keep
-    linux /casper/vmlinuz boot=casper quiet splash ---
+    linux /casper/vmlinuz boot=casper username=defokos hostname=defokos user-fullname="DefokOS Live User" quiet splash ---
     initrd /casper/initrd
 }
 
 menuentry "DefokOS 24.04 LTS (Safe Graphics)" {
     set gfxpayload=keep
-    linux /casper/vmlinuz boot=casper nomodeset quiet splash ---
+    linux /casper/vmlinuz boot=casper username=defokos hostname=defokos user-fullname="DefokOS Live User" nomodeset quiet splash ---
     initrd /casper/initrd
 }
 EOF
@@ -1397,12 +1428,12 @@ MENU COLOR unsel        37;44   #50ffffff #a0000000 none
 LABEL live
   MENU LABEL ^Probar o Instalar DefokOS 24.04 (COSMIC Desktop)
   KERNEL /casper/vmlinuz
-  APPEND initrd=/casper/initrd boot=casper quiet splash ---
+  APPEND initrd=/casper/initrd boot=casper username=defokos hostname=defokos user-fullname="DefokOS Live User" quiet splash ---
 
 LABEL safe
   MENU LABEL ^DefokOS 24.04 (Graficos Seguros / Safe Graphics)
   KERNEL /casper/vmlinuz
-  APPEND initrd=/casper/initrd boot=casper nomodeset quiet splash ---
+  APPEND initrd=/casper/initrd boot=casper username=defokos hostname=defokos user-fullname="DefokOS Live User" nomodeset quiet splash ---
 EOF
 fi
 
