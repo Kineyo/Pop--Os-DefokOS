@@ -476,6 +476,13 @@ log_step "Paso 10: Actualizando metadatos y recomprimiendo filesystem.squashfs"
 
 CASPER_DIR="$(dirname "${SQUASHFS_IMAGE}")"
 
+# Limpieza preventiva para asegurar que SquashFS quepa cómodamente en la partición /recovery (límite 4GB FAT32)
+log_info "Verificando higiene de espacio para partición /recovery..."
+rm -rf "${CHROOT_DIR}/var/lib/flatpak/runtime/"* 2>/dev/null || true
+rm -rf "${CHROOT_DIR}/var/cache/apt/archives/"*.deb 2>/dev/null || true
+rm -rf "${CHROOT_DIR}/var/lib/apt/lists/"* 2>/dev/null || true
+rm -rf "${CHROOT_DIR}/root/.cache/"* 2>/dev/null || true
+
 # Actualizar tamaño real del sistema de archivos
 log_info "Calculando filesystem.size..."
 printf $(du -sx --block-size=1 "${CHROOT_DIR}" | cut -f1) > "${CASPER_DIR}/filesystem.size"

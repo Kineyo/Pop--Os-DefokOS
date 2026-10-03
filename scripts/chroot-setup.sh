@@ -240,11 +240,18 @@ apt-get autoremove -y --purge
 apt-get autoclean -y
 apt-get clean -y
 
+# Purgar runtimes residuales de Flatpak no utilizados (garantiza que SquashFS quepa en los 4GB de la partición /recovery)
+log_info "Limpiando cachés y runtimes residuales de Flatpak..."
+rm -rf /var/lib/flatpak/runtime/* /var/lib/flatpak/app/* /var/lib/flatpak/.removed/* 2>/dev/null || true
+
 # Eliminar archivos temporales y cachés preservando directorios de construcción
 log_info "Borrando cachés de paquetes y listas APT..."
 rm -rf /var/lib/apt/lists/*
 rm -rf /var/cache/apt/archives/*
 rm -rf /var/cache/debconf/*-old
+rm -rf /var/cache/fontconfig/*
+rm -rf /var/cache/man/*
+rm -rf /root/.cache/* /home/*/.cache/* 2>/dev/null || true
 find /var/log -type f -exec truncate -s 0 {} +
 
 # Limpieza segura de /tmp y /var/tmp sin tocar scripts en ejecución
