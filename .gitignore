@@ -8,6 +8,8 @@ out/
 # Downloaded base images
 base.iso
 *.iso.tmp
+debs/
+*.deb
 
 # Editor and OS junk
 .DS_Store

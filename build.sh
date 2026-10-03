@@ -202,15 +202,11 @@ if [[ "${PACK_ONLY}" == "true" ]]; then
     fi
 elif [[ "${REPACK}" == "true" ]]; then
     log_info "Modo --repack activado."
-    log_info "Reutilizando chroot existente, sincronizando overlay y recomprimiendo..."
+    log_info "Reutilizando chroot y árbol ISO existentes..."
     if [[ ! -d "${CHROOT_DIR}" ]] || [[ ! -d "${ISO_EXTRACT_DIR}" ]]; then
         log_err "No se encontraron los directorios de trabajo previos (${CHROOT_DIR})."
         log_err "Debes ejecutar una compilación completa al menos una vez antes de usar --repack."
         exit 1
-    fi
-    if [[ -d "${OVERLAY_DIR}" ]]; then
-        log_info "Inyectando overlay actualizado hacia ${CHROOT_DIR}..."
-        rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
     fi
     SQUASHFS_IMAGE=""
     for candidate in \
@@ -350,10 +346,12 @@ fi
 log_info "Descomprimiendo SquashFS en: ${CHROOT_DIR} (esto puede tomar un par de minutos)..."
 unsquashfs -f -d "${CHROOT_DIR}" "${SQUASHFS_IMAGE}"
 log_success "SquashFS descomprimido."
+fi
 
 # ==============================================================================
 # PASO 6: PREPARACIÓN DEL ENTORNO CHROOT Y MONTURAS BIND
 # ==============================================================================
+if [[ "${PACK_ONLY}" != "true" ]]; then
 log_step "Paso 6: Preparando monturas virtuales y políticas en chroot"
 
 # Configurar resolución DNS temporal en chroot
@@ -405,6 +403,12 @@ mount -t tmpfs tmpfs "${CHROOT_DIR}/run"
 log_step "Paso 7: Sincronizando capas del overlay (dotfiles, fondos, schemas)"
 
 if [[ -d "${OVERLAY_DIR}" ]]; then
+    # Sincronizar iconos de branding desde assets si está presente
+    if [[ -f "${PROJECT_ROOT}/assets/Pop!_OS_Icon.png" ]]; then
+        log_info "Sincronizando iconos de branding desde assets/Pop!_OS_Icon.png..."
+        python3 "${SCRIPTS_DIR}/generate-branding-icons.py" "${PROJECT_ROOT}/assets/Pop!_OS_Icon.png" "${OVERLAY_DIR}" 2>/dev/null || true
+    fi
+
     log_info "Inyectando overlay desde ${OVERLAY_DIR} hacia ${CHROOT_DIR}..."
     rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
     log_success "Overlay inyectado exitosamente."
@@ -423,6 +427,14 @@ mkdir -p "${BUILD_SCRIPTS_STAGE}"
 cp -r "${SCRIPTS_DIR}/"* "${BUILD_SCRIPTS_STAGE}/"
 chmod +x "${BUILD_SCRIPTS_STAGE}/"*.sh
 
+# Copiar paquetes deb locales al chroot si existen (YouTube Music, Discord, Steam)
+BUILD_PACKAGES_STAGE="${CHROOT_DIR}/opt/defokos-packages"
+mkdir -p "${BUILD_PACKAGES_STAGE}"
+if [[ -d "${PROJECT_ROOT}/debs" ]]; then
+    log_info "Copiando paquetes .deb locales (YouTube Music, Discord, Steam) al chroot..."
+    cp -f "${PROJECT_ROOT}/debs/"*.deb "${BUILD_PACKAGES_STAGE}/" 2>/dev/null || true
+fi
+
 # 1. Aprovisionamiento de paquetes y repositorios
 log_info "Ejecutando chroot-setup.sh..."
 chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/chroot-setup.sh
@@ -431,8 +443,8 @@ chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/chroot-setup.sh
 log_info "Ejecutando apply-theme.sh..."
 chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/apply-theme.sh
 
-# Limpiar directorio de scripts de construcción
-rm -rf "${BUILD_SCRIPTS_STAGE}"
+# Limpiar directorios de scripts y paquetes temporales
+rm -rf "${BUILD_SCRIPTS_STAGE}" "${BUILD_PACKAGES_STAGE}"
 log_success "Scripts ejecutados satisfactoriamente."
 
 # ==============================================================================
@@ -456,12 +468,10 @@ umount -lf "${CHROOT_DIR}/dev" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}" 2>/dev/null || true
 
 log_success "Chroot desmontado y limpio."
-fi
 
 # ==============================================================================
 # PASO 10: ACTUALIZACIÓN DE MANIFEST Y RECONSTRUCCIÓN DE SQUASHFS
 # ==============================================================================
-if [[ "${PACK_ONLY}" != "true" ]]; then
 log_step "Paso 10: Actualizando metadatos y recomprimiendo filesystem.squashfs"
 
 CASPER_DIR="$(dirname "${SQUASHFS_IMAGE}")"

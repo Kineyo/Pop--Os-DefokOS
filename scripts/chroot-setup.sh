@@ -91,7 +91,24 @@ fi
 log_info "Actualizando índices APT tras añadir repositorios..."
 apt-get update -y
 
-log_step "3. Instalando paquetes principales del sistema"
+log_step "3. Desinstalando aplicaciones preinstaladas no deseadas"
+log_info "Purgando Thunderbird, Popsicle, xterm y gnome-terminal..."
+apt-get purge -y \
+    thunderbird \
+    'thunderbird-locale-*' \
+    popsicle \
+    popsicle-gtk \
+    xterm \
+    gnome-terminal \
+    gnome-terminal-data || true
+
+# Limpiar archivos de escritorio y accesos residuales
+rm -f /usr/share/applications/thunderbird.desktop \
+      /usr/share/applications/popsicle*.desktop \
+      /usr/share/applications/*xterm*.desktop \
+      /usr/share/applications/org.gnome.Terminal.desktop 2>/dev/null || true
+
+log_step "4. Instalando paquetes principales del sistema"
 
 # Lista de paquetes nativos esenciales
 APT_PACKAGES=(
@@ -124,9 +141,6 @@ APT_PACKAGES=(
     sox
     ffmpeg
     ladspa-sdk
-
-    # Gaming & runtime 32-bit
-    steam-installer
 )
 
 # Detectar versión correcta de libfuse2 según la distribución base
@@ -144,7 +158,47 @@ fi
 log_info "Instalando paquetes: ${APT_PACKAGES[*]}"
 apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
 
-log_step "4. Configurando soporte Flatpak y Flathub"
+log_step "5. Instalando paquetes .deb nativos (YouTube Music, Discord, Steam)"
+
+DEBS_DIR="/opt/defokos-packages"
+mkdir -p "${DEBS_DIR}"
+
+# 1. YouTube Music Desktop App
+if ! ls "${DEBS_DIR}"/youtube-music*.deb >/dev/null 2>&1; then
+    log_info "Descargando YouTube Music Desktop .deb oficial..."
+    curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/youtube-music.deb" \
+        "https://github.com/ytmdesktop/ytmdesktop/releases/download/v2.0.12/youtube-music-desktop-app_2.0.12_amd64.deb" || true
+fi
+
+# 2. Discord .deb
+if ! ls "${DEBS_DIR}"/discord*.deb >/dev/null 2>&1; then
+    log_info "Descargando Discord .deb oficial..."
+    curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/discord.deb" \
+        "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=linux&arch=x64&format=deb" || true
+fi
+
+# 3. Steam .deb
+if ! ls "${DEBS_DIR}"/steam*.deb >/dev/null 2>&1; then
+    log_info "Descargando Steam .deb oficial..."
+    curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/steam.deb" \
+        "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" || true
+fi
+
+# Instalación de paquetes .deb presentes en DEBS_DIR
+for deb_file in "${DEBS_DIR}"/*.deb; do
+    if [[ -f "${deb_file}" ]]; then
+        log_info "Instalando paquete: $(basename "${deb_file}")..."
+        apt-get install -y --no-install-recommends "${deb_file}" || {
+            log_warn "Resolviendo dependencias para $(basename "${deb_file}")..."
+            apt-get install -f -y --no-install-recommends
+        }
+    fi
+done
+
+# Limpieza de paquetes deb temporales
+rm -rf "${DEBS_DIR}"
+
+log_step "6. Configurando soporte Flatpak y Flathub"
 
 apt-get install -y --no-install-recommends flatpak
 
@@ -152,27 +206,33 @@ apt-get install -y --no-install-recommends flatpak
 log_info "Añadiendo repositorio Flathub a nivel de sistema..."
 flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 
-# Pre-instalación de Discord (Intento via Flatpak con fallback a .deb oficial)
-log_info "Instalando Discord (Flatpak o paquete deb oficial)..."
-if ! flatpak install --system -y --noninteractive flathub com.discordapp.Discord 2>/dev/null; then
-    log_info "Instalación de Flatpak restringida en chroot (bwrap). Instalando Discord via paquete .deb oficial..."
-    if curl -fsSL --connect-timeout 15 -o /tmp/discord.deb "https://discord.com/api/download?platform=linux&format=deb" 2>/dev/null; then
-        apt-get install -y --no-install-recommends /tmp/discord.deb || true
-        rm -f /tmp/discord.deb 2>/dev/null || true
-        log_info "Discord instalado exitosamente vía paquete nativo deb."
-    else
-        log_warn "No se pudo preinstalar Discord. El repositorio Flathub queda habilitado para instalación post-arranque."
-    fi
+# Si Discord fue instalado anteriormente via Flatpak, removerlo para usar la versión deb nativa
+if command -v flatpak >/dev/null 2>&1; then
+    flatpak uninstall --system -y com.discordapp.Discord 2>/dev/null || true
 fi
 
-log_step "5. Optimizaciones para AppImages y binarios portables"
+log_step "7. Configurando extensión PreMiD para Mozilla Firefox"
+
+# Asegurar permisos correctos en extensiones y políticas de Firefox
+for ext_path in \
+    "/usr/lib/firefox/browser/extensions/support@premid.app.xpi" \
+    "/usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/support@premid.app.xpi" \
+    "/etc/firefox/policies/policies.json" \
+    "/usr/lib/firefox/distribution/policies.json"; do
+    if [[ -f "${ext_path}" ]]; then
+        chmod 644 "${ext_path}" 2>/dev/null || true
+        log_info "Registrado archivo de Firefox: ${ext_path}"
+    fi
+done
+
+log_step "8. Optimizaciones para AppImages y binarios portables"
 
 # Asegurar permisos correctos para montajes FUSE en usuarios no-root
 if [ -f /etc/fuse.conf ]; then
     sed -i 's/#user_allow_other/user_allow_other/' /etc/fuse.conf || true
 fi
 
-log_step "6. Limpieza profunda para reducir el tamaño de la imagen final"
+log_step "9. Limpieza profunda para reducir el tamaño de la imagen final"
 
 # Eliminar paquetes obsoletos o innecesarios
 log_info "Ejecutando autoremove y clean..."
