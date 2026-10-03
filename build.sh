@@ -451,7 +451,13 @@ export FLAVOUR="DefokOS"
 EOF
 
 # --- 3. Overlay: Repositorios Oficiales de System76 y Llaves GPG ---
-mkdir -p "${OVERLAY_DIR}/etc/apt/sources.list.d" "${OVERLAY_DIR}/etc/apt/trusted.gpg.d"
+mkdir -p "${OVERLAY_DIR}/etc/apt/sources.list.d" "${OVERLAY_DIR}/etc/apt/trusted.gpg.d" "${OVERLAY_DIR}/usr/share/python-apt/templates"
+echo "# Repositories managed via /etc/apt/sources.list.d/system76.sources" > "${OVERLAY_DIR}/etc/apt/sources.list"
+
+# Vincular plantillas oficiales de Pop!_OS para aptsources / python-apt
+ln -sf Ubuntu.info "${OVERLAY_DIR}/usr/share/python-apt/templates/Pop.info" 2>/dev/null || true
+ln -sf Ubuntu.mirrors "${OVERLAY_DIR}/usr/share/python-apt/templates/Pop.mirrors" 2>/dev/null || true
+
 cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/sources.list.d/system76.sources"
 X-Repolib-Name: Pop_OS Applications
 Enabled: yes
@@ -987,9 +993,13 @@ if [ ! -s /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg ] || [ $(stat -
 fi
 cp -f /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null || true
 
-add-apt-repository -y universe || true
-add-apt-repository -y multiverse || true
-add-apt-repository -y restricted || true
+# Limpiar /etc/apt/sources.list para evitar advertencias de targets duplicados
+echo "# Repositories managed in /etc/apt/sources.list.d/system76.sources" > /etc/apt/sources.list
+
+# Vincular plantillas oficiales de Pop!_OS para aptsources / python-apt
+mkdir -p /usr/share/python-apt/templates
+ln -sf Ubuntu.info /usr/share/python-apt/templates/Pop.info 2>/dev/null || true
+ln -sf Ubuntu.mirrors /usr/share/python-apt/templates/Pop.mirrors 2>/dev/null || true
 
 # Repositorio VSCodium
 if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
@@ -998,9 +1008,10 @@ if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
 fi
 echo 'deb [ signed-by=/etc/apt/keyrings/vscodium-archive-keyring.gpg ] https://download.vscodium.com/debs vscodium main' > /etc/apt/sources.list.d/vscodium.list
 
-# Fastfetch PPA
-if ! apt-cache show fastfetch >/dev/null 2>&1; then
-    add-apt-repository -y ppa:zhangsongcui3371/fastfetch || true
+# Repositorio Fastfetch (PPA directo vía list/gpg)
+if [ ! -f /etc/apt/sources.list.d/fastfetch.list ]; then
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/fastfetch.gpg] https://ppa.launchpadcontent.net/zhangsongcui3371/fastfetch/ubuntu noble main" > /etc/apt/sources.list.d/fastfetch.list
+    curl -fsSL --connect-timeout 10 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x83A1440263673F60" | gpg --dearmor -o /etc/apt/trusted.gpg.d/fastfetch.gpg 2>/dev/null || true
 fi
 
 apt-get update -y || apt-get update -y --fix-missing || true
@@ -1009,14 +1020,6 @@ if ! apt-cache show pop-de-cosmic >/dev/null 2>&1; then
     echo "[CHROOT:WARN] pop-de-cosmic aún no aparece en cache. Verificando repositorios Pop!_OS..."
     apt-get update -y || true
 fi
-
-# Configurar live boot Casper
-cat << 'EOCASPER' > /etc/casper.conf
-export USERNAME="defokos"
-export USERFULLNAME="DefokOS Live User"
-export HOST="defokos"
-export BUILD_SYSTEM="DefokOS"
-EOCASPER
 
 # Desinstalar bloatware
 echo "[CHROOT] Purgando thunderbird, popsicle, xterm, gnome-terminal..."
