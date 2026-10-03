@@ -268,6 +268,7 @@ if mount -o loop,ro "${BASE_ISO_FILE}" "${ISO_MOUNT_DIR}" 2>/dev/null; then
     log_success "Árbol de la ISO extraído correctamente vía loop mount."
 else
     log_warn "El montaje loop no estuvo disponible (código 32 o entorno restringido). Extrayendo directamente con xorriso..."
+    rm -rf "${ISO_EXTRACT_DIR:?}"/* 2>/dev/null || true
     xorriso -osirrox on -indev "${BASE_ISO_FILE}" -extract / "${ISO_EXTRACT_DIR}" 2>/dev/null
     chmod -R u+w "${ISO_EXTRACT_DIR}"
     log_success "Árbol de la ISO extraído correctamente vía xorriso."
