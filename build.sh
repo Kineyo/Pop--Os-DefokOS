@@ -278,26 +278,36 @@ import os
 import sys
 import subprocess
 import base64
+import tempfile
 
 def generate_icons(source_path, overlay_dir):
     if not os.path.exists(source_path):
+        print(f"[ICONS:WARN] Archivo fuente no encontrado: {source_path}")
         return False
 
     sizes = [16, 22, 24, 32, 48, 64, 128, 256, 512]
     cache = {}
 
-    for s in sizes:
-        png_tmp = f"/tmp/pop_icon_{s}.png"
-        subprocess.run(["convert", source_path, "-background", "none", "-resize", f"{s}x{s}", png_tmp], check=True)
-        with open(png_tmp, "rb") as f:
-            data = f.read()
-        b64 = base64.b64encode(data).decode("utf-8")
-        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{s}" height="{s}" viewBox="0 0 {s} {s}">
+    with tempfile.TemporaryDirectory(prefix="defokos_icon_") as tmpdir:
+        for s in sizes:
+            png_tmp = os.path.join(tmpdir, f"pop_icon_{s}.png")
+            try:
+                subprocess.run(["convert", source_path, "-background", "none", "-resize", f"{s}x{s}", png_tmp], check=True)
+                with open(png_tmp, "rb") as f:
+                    data = f.read()
+            except Exception as e:
+                print(f"[ICONS:WARN] Error generando resolución {s}x{s}: {e}")
+                continue
+
+            b64 = base64.b64encode(data).decode("utf-8")
+            svg = f'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{s}" height="{s}" viewBox="0 0 {s} {s}">
   <image width="{s}" height="{s}" xlink:href="data:image/png;base64,{b64}"/>
 </svg>'''
-        cache[s] = (data, svg)
+            cache[s] = (data, svg)
 
     for s in sizes:
+        if s not in cache:
+            continue
         dim = f"{s}x{s}"
         places_dir = os.path.join(overlay_dir, "usr/share/icons/Pop", dim, "places")
         os.makedirs(places_dir, exist_ok=True)
@@ -306,6 +316,8 @@ def generate_icons(source_path, overlay_dir):
                 f.write(cache[s][1])
 
     for s in sizes:
+        if s not in cache:
+            continue
         dim = f"{s}x{s}"
         apps_dir = os.path.join(overlay_dir, "usr/share/icons/hicolor", dim, "apps")
         os.makedirs(apps_dir, exist_ok=True)
@@ -315,49 +327,65 @@ def generate_icons(source_path, overlay_dir):
 
     branding_dir = os.path.join(overlay_dir, "usr/share/icons/pop-os-branding")
     os.makedirs(branding_dir, exist_ok=True)
-    with open(os.path.join(branding_dir, "pop_icon.svg"), "w") as f:
-        f.write(cache[512][1])
+    if 512 in cache:
+        with open(os.path.join(branding_dir, "pop_icon.svg"), "w") as f:
+            f.write(cache[512][1])
+    elif cache:
+        largest = max(cache.keys())
+        with open(os.path.join(branding_dir, "pop_icon.svg"), "w") as f:
+            f.write(cache[largest][1])
 
     for s in [16, 22, 24, 32, 48, 64]:
-        round_dir = os.path.join(branding_dir, f"round-logos/{s}")
-        os.makedirs(round_dir, exist_ok=True)
-        with open(os.path.join(round_dir, "distributor-logo.svg"), "w") as f:
-            f.write(cache[s][1])
+        if s in cache:
+            round_dir = os.path.join(branding_dir, f"round-logos/{s}")
+            os.makedirs(round_dir, exist_ok=True)
+            with open(os.path.join(round_dir, "distributor-logo.svg"), "w") as f:
+                f.write(cache[s][1])
 
-    apps_256 = os.path.join(branding_dir, "256x256/apps")
-    os.makedirs(apps_256, exist_ok=True)
-    with open(os.path.join(apps_256, "ubuntu-logo-icon.png"), "wb") as f:
-        f.write(cache[256][0])
+    if 256 in cache:
+        apps_256 = os.path.join(branding_dir, "256x256/apps")
+        os.makedirs(apps_256, exist_ok=True)
+        with open(os.path.join(apps_256, "ubuntu-logo-icon.png"), "wb") as f:
+            f.write(cache[256][0])
 
     pixmaps_dir = os.path.join(overlay_dir, "usr/share/pixmaps")
     os.makedirs(pixmaps_dir, exist_ok=True)
-    for name in ["distributor-logo-pop-os.png", "distributor-logo.png", "pop-os.png"]:
-        with open(os.path.join(pixmaps_dir, name), "wb") as f:
-            f.write(cache[256][0])
-    subprocess.run(["cp", "-f", source_path, os.path.join(pixmaps_dir, "Pop!_OS_Icon.png")], check=True)
+    best_px = cache.get(256, cache.get(128, None))
+    if best_px:
+        for name in ["distributor-logo-pop-os.png", "distributor-logo.png", "pop-os.png"]:
+            with open(os.path.join(pixmaps_dir, name), "wb") as f:
+                f.write(best_px[0])
+    subprocess.run(["cp", "-f", source_path, os.path.join(pixmaps_dir, "Pop!_OS_Icon.png")], check=False)
 
     pop_basic = os.path.join(overlay_dir, "usr/share/plymouth/themes/pop-basic")
     os.makedirs(pop_basic, exist_ok=True)
-    with open(os.path.join(pop_basic, "header-image.png"), "wb") as f:
-        f.write(cache[256][0])
-    with open(os.path.join(pop_basic, "bgrt-fallback.png"), "wb") as f:
-        f.write(cache[256][0])
+    if best_px:
+        with open(os.path.join(pop_basic, "header-image.png"), "wb") as f:
+            f.write(best_px[0])
+        with open(os.path.join(pop_basic, "bgrt-fallback.png"), "wb") as f:
+            f.write(best_px[0])
 
     spinner = os.path.join(overlay_dir, "usr/share/plymouth/themes/spinner")
     os.makedirs(spinner, exist_ok=True)
-    with open(os.path.join(spinner, "bgrt-fallback.png"), "wb") as f:
-        f.write(cache[256][0])
-    subprocess.run(["convert", source_path, "-background", "none", "-resize", "x87", os.path.join(spinner, "watermark.png")], check=True)
+    if best_px:
+        with open(os.path.join(spinner, "bgrt-fallback.png"), "wb") as f:
+            f.write(best_px[0])
+    try:
+        subprocess.run(["convert", source_path, "-background", "none", "-resize", "x87", os.path.join(spinner, "watermark.png")], check=True)
+    except Exception:
+        pass
 
     grub_theme_dir = os.path.join(overlay_dir, "boot/grub/themes/pop")
     os.makedirs(grub_theme_dir, exist_ok=True)
-    with open(os.path.join(grub_theme_dir, "logo.png"), "wb") as f:
-        f.write(cache[128][0])
+    if 128 in cache:
+        with open(os.path.join(grub_theme_dir, "logo.png"), "wb") as f:
+            f.write(cache[128][0])
 
     calamares_dir = os.path.join(overlay_dir, "etc/calamares/branding/defokos")
     os.makedirs(calamares_dir, exist_ok=True)
-    with open(os.path.join(calamares_dir, "logo.png"), "wb") as f:
-        f.write(cache[128][0])
+    if 128 in cache:
+        with open(os.path.join(calamares_dir, "logo.png"), "wb") as f:
+            f.write(cache[128][0])
     return True
 
 if __name__ == "__main__":
@@ -430,8 +458,41 @@ Components: main restricted universe multiverse
 Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
 EOF
 
-curl -fsSL --connect-timeout 10 "https://apt.pop-os.org/proprietary/archive.key" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" 2>/dev/null || true
-curl -fsSL --connect-timeout 10 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" 2>/dev/null || true
+# Sincronización robusta de llaves GPG de Pop!_OS y Ubuntu (host o keyserver)
+mkdir -p "${OVERLAY_DIR}/etc/apt/trusted.gpg.d" "${OVERLAY_DIR}/usr/share/keyrings"
+
+POP_KEY="${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg"
+if [[ -s "/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" ]]; then
+    log_info "Copiando llave oficial de Pop!_OS desde el sistema anfitrión..."
+    cp -f "/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" "${POP_KEY}"
+elif [[ -s "/usr/share/keyrings/pop-archive-keyring.gpg" ]]; then
+    log_info "Copiando llave oficial de Pop!_OS desde /usr/share/keyrings..."
+    cp -f "/usr/share/keyrings/pop-archive-keyring.gpg" "${POP_KEY}"
+else
+    log_info "Descargando llave de Pop!_OS desde keyserver oficial de Ubuntu..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o "${POP_KEY}" 2>/dev/null || true
+fi
+cp -f "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
+
+UBUNTU_KEY="${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg"
+if [[ -s "/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" ]]; then
+    log_info "Copiando llave oficial de Ubuntu desde el sistema anfitrión..."
+    cp -f "/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" "${UBUNTU_KEY}"
+elif [[ -s "/usr/share/keyrings/ubuntu-archive-keyring.gpg" ]]; then
+    log_info "Copiando llave oficial de Ubuntu desde /usr/share/keyrings..."
+    cp -f "/usr/share/keyrings/ubuntu-archive-keyring.gpg" "${UBUNTU_KEY}"
+else
+    log_info "Descargando llave de Ubuntu desde keyserver oficial..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${UBUNTU_KEY}" 2>/dev/null || true
+fi
+cp -f "${UBUNTU_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/ubuntu-archive-keyring.gpg" 2>/dev/null || true
+
+# Verificación de integridad de las llaves
+if [[ ! -s "${POP_KEY}" ]] || [[ $(stat -c%s "${POP_KEY}" 2>/dev/null || echo 0) -lt 500 ]]; then
+    log_warn "Reintentando descarga de llave Pop!_OS desde keyserver..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o "${POP_KEY}" 2>/dev/null || true
+    cp -f "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
+fi
 
 # --- 4. Overlay: Configuración de Fuente por Defecto (Pixelify Sans) ---
 mkdir -p "${OVERLAY_DIR}/etc/fonts" "${OVERLAY_DIR}/usr/share/fonts/truetype/pixelify-sans"
@@ -672,9 +733,23 @@ export LANG=C.UTF-8
 echo "[CHROOT] Configurando arquitectura i386 para compatibilidad de 32-bit (Steam)..."
 dpkg --add-architecture i386 || true
 
-echo "[CHROOT] Actualizando fuentes APT e instalando certificados..."
-apt-get update -y || apt-get update -y --fix-missing || true
+echo "[CHROOT] Asegurando certificados y herramientas base..."
+apt-get update -y || true
 apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release software-properties-common
+
+echo "[CHROOT] Verificando llaves oficiales de Pop!_OS y repositorios System76..."
+mkdir -p /etc/apt/trusted.gpg.d /usr/share/keyrings
+if [ ! -s /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg ] || [ $(stat -c%s /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg 2>/dev/null || echo 0) -lt 500 ]; then
+    echo "[CHROOT] Descargando llave oficial de Pop!_OS desde keyserver..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg || true
+fi
+cp -f /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg /usr/share/keyrings/pop-archive-keyring.gpg 2>/dev/null || true
+
+if [ ! -s /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg ] || [ $(stat -c%s /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg 2>/dev/null || echo 0) -lt 500 ]; then
+    echo "[CHROOT] Descargando llave oficial de Ubuntu desde keyserver..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg || true
+fi
+cp -f /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null || true
 
 add-apt-repository -y universe || true
 add-apt-repository -y multiverse || true
@@ -693,6 +768,11 @@ if ! apt-cache show fastfetch >/dev/null 2>&1; then
 fi
 
 apt-get update -y || apt-get update -y --fix-missing || true
+
+if ! apt-cache show pop-de-cosmic >/dev/null 2>&1; then
+    echo "[CHROOT:WARN] pop-de-cosmic aún no aparece en cache. Verificando repositorios Pop!_OS..."
+    apt-get update -y || true
+fi
 
 # Configurar live boot Casper
 cat << 'EOCASPER' > /etc/casper.conf
