@@ -99,12 +99,14 @@ cleanup_mounts() {
     set +e
     # Desmontar puntos de montaje chroot en orden inverso
     for mp in \
+        "${CHROOT_DIR}/opt/defokos-build-scripts" \
         "${CHROOT_DIR}/tmp/scripts" \
         "${CHROOT_DIR}/run" \
         "${CHROOT_DIR}/sys" \
         "${CHROOT_DIR}/proc" \
         "${CHROOT_DIR}/dev/pts" \
         "${CHROOT_DIR}/dev" \
+        "${CHROOT_DIR}" \
         "${ISO_MOUNT_DIR}"; do
         if mountpoint -q "$mp" 2>/dev/null; then
             log_info "Desmontando: $mp"
@@ -310,6 +312,11 @@ exit 101
 EOF
 chmod +x "${CHROOT_DIR}/usr/sbin/policy-rc.d"
 
+# Convertir el chroot en un punto de montaje con propagación slave
+# Esto permite que bubblewrap (bwrap) y flatpak puedan gestionar namespaces sin error 'Failed to make / slave'
+mount --bind "${CHROOT_DIR}" "${CHROOT_DIR}"
+mount --make-rslave "${CHROOT_DIR}"
+
 # Montar sistemas de archivos virtuales requeridos por apt, dkms, systemd y flatpak
 log_info "Montando /dev, /proc, /sys y /run en chroot..."
 mount --bind /dev "${CHROOT_DIR}/dev"
@@ -336,21 +343,22 @@ fi
 # ==============================================================================
 log_step "Paso 8: Ejecutando scripts de configuración dentro del chroot"
 
-# Copiar scripts al chroot temporalmente
-mkdir -p "${CHROOT_DIR}/tmp/scripts"
-cp -r "${SCRIPTS_DIR}/"* "${CHROOT_DIR}/tmp/scripts/"
-chmod +x "${CHROOT_DIR}/tmp/scripts/"*.sh
+# Copiar scripts al chroot en ubicación protegida (fuera de /tmp para evitar borrado accidental)
+BUILD_SCRIPTS_STAGE="${CHROOT_DIR}/opt/defokos-build-scripts"
+mkdir -p "${BUILD_SCRIPTS_STAGE}"
+cp -r "${SCRIPTS_DIR}/"* "${BUILD_SCRIPTS_STAGE}/"
+chmod +x "${BUILD_SCRIPTS_STAGE}/"*.sh
 
 # 1. Aprovisionamiento de paquetes y repositorios
-log_info "Ejecutando /tmp/scripts/chroot-setup.sh..."
-chroot "${CHROOT_DIR}" /bin/bash /tmp/scripts/chroot-setup.sh
+log_info "Ejecutando chroot-setup.sh..."
+chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/chroot-setup.sh
 
 # 2. Inyección de tema visual, COSMIC y dotfiles
-log_info "Ejecutando /tmp/scripts/apply-theme.sh..."
-chroot "${CHROOT_DIR}" /bin/bash /tmp/scripts/apply-theme.sh
+log_info "Ejecutando apply-theme.sh..."
+chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/apply-theme.sh
 
-# Limpiar directorio temporal de scripts
-rm -rf "${CHROOT_DIR}/tmp/scripts"
+# Limpiar directorio de scripts de construcción
+rm -rf "${BUILD_SCRIPTS_STAGE}"
 log_success "Scripts ejecutados satisfactoriamente."
 
 # ==============================================================================
@@ -365,12 +373,13 @@ rm -f "${CHROOT_DIR}/usr/sbin/policy-rc.d"
 rm -f "${CHROOT_DIR}/etc/resolv.conf"
 ln -sf /run/systemd/resolve/stub-resolv.conf "${CHROOT_DIR}/etc/resolv.conf" 2>/dev/null || true
 
-# Desmontar puntos de montaje
+# Desmontar puntos de montaje en orden inverso
 umount -lf "${CHROOT_DIR}/run" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}/sys" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}/proc" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}/dev/pts" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}/dev" 2>/dev/null || true
+umount -lf "${CHROOT_DIR}" 2>/dev/null || true
 
 log_success "Chroot desmontado y limpio."
 

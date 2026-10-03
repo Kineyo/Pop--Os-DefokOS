@@ -152,13 +152,18 @@ apt-get install -y --no-install-recommends flatpak
 log_info "Añadiendo repositorio Flathub a nivel de sistema..."
 flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 
-# Pre-instalación de aplicaciones Flatpak seleccionadas
-# Discord es distribuido principalmente via Flatpak en distribuciones modernas
-log_info "Instalando Discord via Flatpak (system-wide)..."
-flatpak install --system -y --noninteractive flathub com.discordapp.Discord || {
-    log_warn "No se pudo pre-descargar Discord Flatpak dentro del chroot (red o namespace restringido)."
-    log_warn "El repositorio Flathub queda habilitado para instalación en primer arranque."
-}
+# Pre-instalación de Discord (Intento via Flatpak con fallback a .deb oficial)
+log_info "Instalando Discord (Flatpak o paquete deb oficial)..."
+if ! flatpak install --system -y --noninteractive flathub com.discordapp.Discord 2>/dev/null; then
+    log_info "Instalación de Flatpak restringida en chroot (bwrap). Instalando Discord via paquete .deb oficial..."
+    if curl -fsSL --connect-timeout 15 -o /tmp/discord.deb "https://discord.com/api/download?platform=linux&format=deb" 2>/dev/null; then
+        apt-get install -y --no-install-recommends /tmp/discord.deb || true
+        rm -f /tmp/discord.deb 2>/dev/null || true
+        log_info "Discord instalado exitosamente vía paquete nativo deb."
+    else
+        log_warn "No se pudo preinstalar Discord. El repositorio Flathub queda habilitado para instalación post-arranque."
+    fi
+fi
 
 log_step "5. Optimizaciones para AppImages y binarios portables"
 
@@ -175,14 +180,16 @@ apt-get autoremove -y --purge
 apt-get autoclean -y
 apt-get clean -y
 
-# Eliminar archivos temporales y cachés
+# Eliminar archivos temporales y cachés preservando directorios de construcción
 log_info "Borrando cachés de paquetes y listas APT..."
 rm -rf /var/lib/apt/lists/*
-rm -rf /tmp/*
-rm -rf /var/tmp/*
 rm -rf /var/cache/apt/archives/*
 rm -rf /var/cache/debconf/*-old
 find /var/log -type f -exec truncate -s 0 {} +
+
+# Limpieza segura de /tmp y /var/tmp sin tocar scripts en ejecución
+find /tmp -mindepth 1 -maxdepth 1 ! -name 'scripts' ! -name 'defokos*' -exec rm -rf {} + 2>/dev/null || true
+find /var/tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
 # Truncar machine-id para que systemd regenere un ID único en el primer arranque
 log_info "Restableciendo machine-id..."
