@@ -68,6 +68,7 @@ VOLUME_LABEL="DEFOKOS_24_04"
 # Parámetros opcionales
 LOCAL_BASE_ISO=""
 PACK_ONLY=false
+REPACK=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -79,13 +80,17 @@ while [[ $# -gt 0 ]]; do
             PACK_ONLY=true
             shift
             ;;
+        --repack)
+            REPACK=true
+            shift
+            ;;
         --help|-h)
-            echo "Uso: sudo $0 [--iso /ruta/a/base.iso] [--pack-only]"
+            echo "Uso: sudo $0 [--iso /ruta/a/base.iso] [--repack] [--pack-only]"
             echo ""
             echo "Opciones:"
             echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
-            echo "  --pack-only             Omite aprovisionamiento y empaqueta la ISO directamente con xorriso"
-            echo "                          (útil si el SquashFS ya fue generado previamente)"
+            echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
+            echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
             echo ""
             echo "Variables de entorno opcionales:"
             echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso"
@@ -100,6 +105,25 @@ while [[ $# -gt 0 ]]; do
 done
 
 COMPRESSION="${COMPRESSION:-zstd}"
+
+# Auto-detección inteligente de la ISO oficial local de Pop!_OS 24.04
+if [[ -z "${LOCAL_BASE_ISO}" ]]; then
+    REAL_USER="${SUDO_USER:-${USER}}"
+    for candidate_iso in \
+        "/home/alex/Descargas/pop-os_24.04_amd64_generic_28.iso" \
+        "/home/${REAL_USER}/Descargas/pop-os_24.04_amd64_generic_28.iso" \
+        "/home/${REAL_USER}/Descargas/pop-os_24.04"*.iso \
+        "/home/${REAL_USER}/Downloads/pop-os_24.04"*.iso \
+        "${HOME}/Descargas/pop-os_24.04"*.iso \
+        "${HOME}/Downloads/pop-os_24.04"*.iso; do
+        if [[ -f "${candidate_iso}" ]]; then
+            LOCAL_BASE_ISO="${candidate_iso}"
+            log_info "Auto-detectada imagen base local de Pop!_OS 24.04: ${LOCAL_BASE_ISO}"
+            break
+        fi
+    done
+fi
+
 BASE_ISO_FILE="${LOCAL_BASE_ISO:-${WORK_DIR}/base.iso}"
 BOOT_OPTS_FILE="${WORK_DIR}/el_torito_opts.txt"
 
@@ -176,6 +200,28 @@ if [[ "${PACK_ONLY}" == "true" ]]; then
         log_err "Debes ejecutar una compilación completa al menos una vez antes de usar --pack-only."
         exit 1
     fi
+elif [[ "${REPACK}" == "true" ]]; then
+    log_info "Modo --repack activado."
+    log_info "Reutilizando chroot existente, sincronizando overlay y recomprimiendo..."
+    if [[ ! -d "${CHROOT_DIR}" ]] || [[ ! -d "${ISO_EXTRACT_DIR}" ]]; then
+        log_err "No se encontraron los directorios de trabajo previos (${CHROOT_DIR})."
+        log_err "Debes ejecutar una compilación completa al menos una vez antes de usar --repack."
+        exit 1
+    fi
+    if [[ -d "${OVERLAY_DIR}" ]]; then
+        log_info "Inyectando overlay actualizado hacia ${CHROOT_DIR}..."
+        rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
+    fi
+    SQUASHFS_IMAGE=""
+    for candidate in \
+        "${ISO_EXTRACT_DIR}/casper/filesystem.squashfs" \
+        "${ISO_EXTRACT_DIR}/live/filesystem.squashfs" \
+        "${ISO_EXTRACT_DIR}"/casper*/filesystem.squashfs; do
+        if [[ -f "$candidate" ]]; then
+            SQUASHFS_IMAGE="$(realpath "$candidate")"
+            break
+        fi
+    done
 else
 
 # ==============================================================================
@@ -410,10 +456,12 @@ umount -lf "${CHROOT_DIR}/dev" 2>/dev/null || true
 umount -lf "${CHROOT_DIR}" 2>/dev/null || true
 
 log_success "Chroot desmontado y limpio."
+fi
 
 # ==============================================================================
 # PASO 10: ACTUALIZACIÓN DE MANIFEST Y RECONSTRUCCIÓN DE SQUASHFS
 # ==============================================================================
+if [[ "${PACK_ONLY}" != "true" ]]; then
 log_step "Paso 10: Actualizando metadatos y recomprimiendo filesystem.squashfs"
 
 CASPER_DIR="$(dirname "${SQUASHFS_IMAGE}")"

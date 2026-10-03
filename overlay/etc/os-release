@@ -1,8 +1,9 @@
-NAME="DefokOS"
+NAME="Pop!_OS"
 PRETTY_NAME="DefokOS 24.04 LTS (Utane Uta Edition)"
 ID=pop
 ID_LIKE="ubuntu debian"
-DEFOKOS_ID="defokos"
+DEFOKOS_NAME="DefokOS"
+DEFOKOS_EDITION="Utane Uta Edition"
 VERSION="24.04 LTS"
 VERSION_ID="24.04"
 VERSION_CODENAME="noble"
