@@ -27,10 +27,20 @@ export DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-log_step "1. Verificando entorno chroot y dependencias base"
+log_step "1. Verificando entorno chroot y conectividad de red"
 
 # Asegurar directorios esenciales
 mkdir -p /etc/apt/keyrings /etc/apt/sources.list.d /usr/share/keyrings
+
+# Validación activa de DNS dentro del chroot
+log_info "Comprobando resolución DNS dentro del chroot..."
+if ! getent ahosts apt.pop-os.org >/dev/null 2>&1; then
+    log_warn "Fallo en resolución DNS inicial dentro de chroot. Inyectando resolvedores públicos de respaldo..."
+    cat << 'EOF' > /etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+fi
 
 # Soporte para binarios de 32-bit (Requerido para Steam y compatibilidad Wine)
 log_info "Habilitando arquitectura i386 para compatibilidad de 32 bits..."
@@ -57,8 +67,16 @@ add-apt-repository -y restricted || true
 # --- Repositorio VSCodium ---
 log_info "Configurando repositorio oficial de VSCodium..."
 if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
-    curl -fsSL https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/vscodium-archive-keyring.gpg
+    VSC_KEY_URL1="https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg"
+    VSC_KEY_URL2="https://raw.githubusercontent.com/paulcarroty/vscodium-deb-rpm-repo/master/pub.gpg"
+    
+    if curl -fsSL --connect-timeout 10 "${VSC_KEY_URL1}" | gpg --dearmor -o /etc/apt/keyrings/vscodium-archive-keyring.gpg 2>/dev/null; then
+        log_info "Llave de VSCodium obtenida exitosamente desde GitLab."
+    elif curl -fsSL --connect-timeout 10 "${VSC_KEY_URL2}" | gpg --dearmor -o /etc/apt/keyrings/vscodium-archive-keyring.gpg 2>/dev/null; then
+        log_info "Llave de VSCodium obtenida exitosamente desde mirror de GitHub."
+    else
+        log_warn "No se pudo obtener la llave GPG de VSCodium automáticamente."
+    fi
 fi
 echo 'deb [ signed-by=/etc/apt/keyrings/vscodium-archive-keyring.gpg ] https://download.vscodium.com/debs vscodium main' \
     > /etc/apt/sources.list.d/vscodium.list

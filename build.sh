@@ -280,10 +280,28 @@ log_success "SquashFS descomprimido."
 # ==============================================================================
 log_step "Paso 6: Preparando monturas virtuales y políticas en chroot"
 
-# Configurar resolución DNS temporal heredando la del host
-if [[ -f /etc/resolv.conf ]]; then
+# Configurar resolución DNS temporal en chroot
+# Importante: /etc/resolv.conf en hosts modernos apunta a 127.0.0.53 (systemd-resolved stub),
+# el cual NO se ejecuta dentro del chroot. Debemos usar los DNS reales y públicos.
+rm -f "${CHROOT_DIR}/etc/resolv.conf"
+if [[ -f /run/systemd/resolve/resolv.conf ]]; then
+    # Copiar servidores DNS upstream reales de systemd-resolved
+    cp -L /run/systemd/resolve/resolv.conf "${CHROOT_DIR}/etc/resolv.conf"
+elif [[ -f /etc/resolv.conf ]]; then
     cp -L /etc/resolv.conf "${CHROOT_DIR}/etc/resolv.conf"
 fi
+
+# Eliminar 127.0.0.53 si fue copiado para evitar cuelgues o fallas de resolución
+if [[ -f "${CHROOT_DIR}/etc/resolv.conf" ]]; then
+    sed -i '/127\.0\.0\.53/d' "${CHROOT_DIR}/etc/resolv.conf" 2>/dev/null || true
+fi
+
+# Garantizar DNS públicos de alta disponibilidad (Cloudflare y Google)
+cat << 'EOF' >> "${CHROOT_DIR}/etc/resolv.conf"
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+log_info "Configuración DNS en chroot establecida con éxito."
 
 # Prevenir que servicios/daemons arranquen durante la instalación de paquetes
 cat << 'EOF' > "${CHROOT_DIR}/usr/sbin/policy-rc.d"
