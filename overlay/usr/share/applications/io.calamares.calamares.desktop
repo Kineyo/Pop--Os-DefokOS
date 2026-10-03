@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install DefokOS
+GenericName=Live System Installer
+Comment=Install DefokOS 24.04 LTS (Utane Uta Edition) to disk
+Exec=sh -c "pkexec calamares"
+Icon=distributor-logo-pop-os
+Terminal=false
+StartupNotify=true
+Categories=System;

@@ -37,6 +37,22 @@ log_success() { echo -e "${C_BOLD}${C_GREEN}[BUILD:OK]${C_RESET} $*"; }
 log_warn()    { echo -e "${C_BOLD}${C_YELLOW}[BUILD:WARN]${C_RESET} $*"; }
 log_err()     { echo -e "${C_BOLD}${C_RED}[BUILD:ERROR]${C_RESET} $*" >&2; }
 
+# --- Ayuda preliminar sin requerir sudo ---
+if [[ " $* " =~ " --help " ]] || [[ " $* " =~ " -h " ]]; then
+    echo "Uso: sudo $0 [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
+    echo ""
+    echo "Opciones:"
+    echo "  --bootstrap             Construye el sistema desde cero vía debootstrap y repositorios oficiales System76"
+    echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
+    echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
+    echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
+    echo ""
+    echo "Variables de entorno opcionales:"
+    echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso ni --bootstrap"
+    echo "  COMPRESSION     Algoritmo de compresión para squashfs (zstd o xz, por defecto: zstd)"
+    exit 0
+fi
+
 # --- Verificación de privilegios de superusuario ---
 if [[ "${EUID}" -ne 0 ]]; then
     log_err "Este script requiere privilegios de root para administrar chroot, montajes y permisos."
@@ -67,11 +83,14 @@ VOLUME_LABEL="DEFOKOS_24_04"
 
 # Parámetros opcionales
 LOCAL_BASE_ISO=""
-PACK_ONLY=false
-REPACK=false
+BOOTSTRAP=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --bootstrap)
+            BOOTSTRAP=true
+            shift
+            ;;
         --iso)
             LOCAL_BASE_ISO="$2"
             shift 2
@@ -85,15 +104,16 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "Uso: sudo $0 [--iso /ruta/a/base.iso] [--repack] [--pack-only]"
+            echo "Uso: sudo $0 [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
             echo ""
             echo "Opciones:"
-            echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
+            echo "  --bootstrap             Construye el sistema desde cero vía debootstrap y repositorios oficiales System76"
             echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
             echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
+            echo "  --iso /ruta/a/base.iso  Usa una imagen base local existente"
             echo ""
             echo "Variables de entorno opcionales:"
-            echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso"
+            echo "  BASE_ISO_URL    URL para descargar la ISO base si no se especifica --iso ni --bootstrap"
             echo "  COMPRESSION     Algoritmo de compresión para squashfs (zstd o xz, por defecto: zstd)"
             exit 0
             ;;
@@ -218,6 +238,28 @@ elif [[ "${REPACK}" == "true" ]]; then
             break
         fi
     done
+elif [[ "${BOOTSTRAP}" == "true" ]]; then
+    log_info "Modo --bootstrap activado: Construyendo imagen base desde repositorios oficiales..."
+    if ! command -v debootstrap >/dev/null 2>&1; then
+        log_info "Instalando debootstrap en el sistema host..."
+        apt-get update -y && apt-get install -y debootstrap
+    fi
+
+    # Limpiar y preparar chroot para construcción limpia
+    if [[ -d "${CHROOT_DIR}" ]]; then
+        log_warn "Eliminando chroot anterior para una instalación limpia..."
+        rm -rf "${CHROOT_DIR}"
+    fi
+    mkdir -p "${CHROOT_DIR}"
+
+    log_info "Ejecutando debootstrap noble (Ubuntu 24.04 LTS base)..."
+    if ! debootstrap --arch=amd64 noble "${CHROOT_DIR}" http://apt.pop-os.org/ubuntu; then
+        log_warn "Fallo con mirror de Pop!_OS. Reintentando con mirror oficial de Ubuntu..."
+        debootstrap --arch=amd64 noble "${CHROOT_DIR}" http://archive.ubuntu.com/ubuntu/
+    fi
+
+    mkdir -p "${ISO_EXTRACT_DIR}/casper"
+    SQUASHFS_IMAGE="${ISO_EXTRACT_DIR}/casper/filesystem.squashfs"
 else
 
 # ==============================================================================
@@ -412,6 +454,28 @@ if [[ -d "${OVERLAY_DIR}" ]]; then
     log_info "Inyectando overlay desde ${OVERLAY_DIR} hacia ${CHROOT_DIR}..."
     rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
     log_success "Overlay inyectado exitosamente."
+
+    # Sincronizar fondo, logotipo y título del menú de arranque en la ISO extraída
+    log_info "Sincronizando menú y fondo de arranque en la imagen ISO..."
+    if [[ -d "${ISO_EXTRACT_DIR}/boot/grub/themes/pop" ]]; then
+        if [[ -f "${PROJECT_ROOT}/assets/boot_background_1080p.png" ]]; then
+            cp -f "${PROJECT_ROOT}/assets/boot_background_1080p.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/background.png"
+        fi
+        if [[ -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" ]]; then
+            cp -f "${OVERLAY_DIR}/boot/grub/themes/pop/logo.png" "${ISO_EXTRACT_DIR}/boot/grub/themes/pop/logo.png"
+        fi
+    fi
+    if [[ -f "${OVERLAY_DIR}/boot/efi/splash.bmp" ]]; then
+        cp -f "${OVERLAY_DIR}/boot/efi/splash.bmp" "${ISO_EXTRACT_DIR}/splash.bmp" 2>/dev/null || true
+        mkdir -p "${ISO_EXTRACT_DIR}/boot/efi" 2>/dev/null || true
+        cp -f "${OVERLAY_DIR}/boot/efi/splash.bmp" "${ISO_EXTRACT_DIR}/boot/efi/splash.bmp" 2>/dev/null || true
+    fi
+    if [[ -f "${ISO_EXTRACT_DIR}/boot/grub/grub.cfg" ]]; then
+        sed -i 's/Try or Install Pop_OS/DefokOS 24.04 LTS (Utane Uta Edition) - COSMIC Desktop/g' "${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
+    fi
+    if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg" ]]; then
+        sed -i 's/default pop-os/default defokos/g; s/label pop-os/label defokos/g' "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
+    fi
 else
     log_warn "No se encontró el directorio overlay (${OVERLAY_DIR}). Omitiendo..."
 fi
@@ -482,6 +546,18 @@ rm -rf "${CHROOT_DIR}/var/lib/flatpak/runtime/"* 2>/dev/null || true
 rm -rf "${CHROOT_DIR}/var/cache/apt/archives/"*.deb 2>/dev/null || true
 rm -rf "${CHROOT_DIR}/var/lib/apt/lists/"* 2>/dev/null || true
 rm -rf "${CHROOT_DIR}/root/.cache/"* 2>/dev/null || true
+
+# Sincronizar kernel e initrd para el arranque de la ISO live
+LATEST_KERNEL=$(ls -t "${CHROOT_DIR}/boot/vmlinuz"* 2>/dev/null | head -n1 || true)
+LATEST_INITRD=$(ls -t "${CHROOT_DIR}/boot/initrd.img"* 2>/dev/null | head -n1 || true)
+if [[ -n "${LATEST_KERNEL}" ]] && [[ -f "${LATEST_KERNEL}" ]]; then
+    log_info "Sincronizando kernel con la imagen live: $(basename "${LATEST_KERNEL}")..."
+    cp -f "${LATEST_KERNEL}" "${CASPER_DIR}/vmlinuz.efi"
+fi
+if [[ -n "${LATEST_INITRD}" ]] && [[ -f "${LATEST_INITRD}" ]]; then
+    log_info "Sincronizando initrd con la imagen live: $(basename "${LATEST_INITRD}")..."
+    cp -f "${LATEST_INITRD}" "${CASPER_DIR}/initrd.gz"
+fi
 
 # Actualizar tamaño real del sistema de archivos
 log_info "Calculando filesystem.size..."
@@ -572,11 +648,18 @@ if [[ -n "${EFI_IMG}" ]]; then
     )
 fi
 
-# Inyección de código de arranque MBR híbrido si se dispone de la base
+# Inyección de código de arranque MBR híbrido si se dispone de la base o binario de sistema
 if [[ -f "${BASE_ISO_FILE}" ]]; then
     log_info "Inyectando código de arranque MBR híbrido desde la ISO base..."
     XORRISO_ARGS+=(
         -isohybrid-mbr "--interval:local_fs:0s-15s:zero_mbrpt,zero_gpt:${BASE_ISO_FILE}"
+        --mbr-force-bootable
+        -partition_cyl_align off
+    )
+elif [[ -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]]; then
+    log_info "Inyectando código de arranque MBR híbrido estándar (/usr/lib/ISOLINUX/isohdpfx.bin)..."
+    XORRISO_ARGS+=(
+        -isohybrid-mbr "/usr/lib/ISOLINUX/isohdpfx.bin"
         --mbr-force-bootable
         -partition_cyl_align off
     )

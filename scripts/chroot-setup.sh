@@ -64,6 +64,40 @@ add-apt-repository -y universe || true
 add-apt-repository -y multiverse || true
 add-apt-repository -y restricted || true
 
+# --- Repositorio System76 / Pop!_OS ---
+log_info "Verificando repositorios oficiales de System76 y Pop!_OS..."
+if [ ! -f /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg ]; then
+    mkdir -p /etc/apt/trusted.gpg.d
+    curl -fsSL "https://apt.pop-os.org/proprietary/archive.key" | gpg --dearmor -o /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg 2>/dev/null || true
+fi
+if [ ! -f /etc/apt/sources.list.d/system76.sources ]; then
+    cat << 'EOF' > /etc/apt/sources.list.d/system76.sources
+X-Repolib-Name: Pop_OS Applications
+Enabled: yes
+Types: deb
+URIs: http://apt.pop-os.org/proprietary
+Suites: noble
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+
+X-Repolib-Name: Pop_OS Release Sources
+Enabled: yes
+Types: deb
+URIs: http://apt.pop-os.org/release
+Suites: noble
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+
+X-Repolib-Name: Pop_OS System Sources
+Enabled: yes
+Types: deb
+URIs: http://apt.pop-os.org/ubuntu
+Suites: noble noble-security noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+EOF
+fi
+
 # --- Repositorio VSCodium ---
 log_info "Configurando repositorio oficial de VSCodium..."
 if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
@@ -112,6 +146,55 @@ log_step "4. Instalando paquetes principales del sistema"
 
 # Lista de paquetes nativos esenciales
 APT_PACKAGES=(
+    # Núcleo del sistema y soporte Live ISO
+    linux-generic
+    casper
+    systemd
+    systemd-sysv
+    udev
+    sudo
+    locales
+    network-manager
+    net-tools
+
+    # Entorno COSMIC Desktop nativo (System76)
+    pop-de-cosmic
+    cosmic-session
+    cosmic-store
+    cosmic-term
+    cosmic-edit
+    cosmic-files
+    cosmic-greeter
+    cosmic-app-library
+
+    # Pila Gráfica: Mesa, Vulkan y OpenGL
+    mesa-vulkan-drivers
+    mesa-utils
+    vulkan-tools
+    libvulkan1
+    libgl1-mesa-dri
+    libgl1
+    libglu1-mesa
+    libegl-mesa0
+    libglx-mesa0
+
+    # Pila de Audio: Pipewire y compatibilidad PulseAudio
+    pipewire
+    pipewire-pulse
+    pipewire-alsa
+    pipewire-audio-client-libraries
+    wireplumber
+    pulseaudio-utils
+    pavucontrol
+    audacity
+    sox
+    ffmpeg
+    ladspa-sdk
+
+    # Instalador de sistema universal independiente
+    calamares
+    calamares-settings-ubuntu-common
+
     # Emulador de terminal y utilidades CLI modernas
     kitty
     fastfetch
@@ -134,13 +217,6 @@ APT_PACKAGES=(
     # Soporte AppImage sin conflictos (FUSE 2 + FUSE 3)
     # Ubuntu 24.04 utiliza libfuse2t64; Ubuntu 22.04 utiliza libfuse2
     fuse3
-
-    # Audio profesional y síntesis de voz
-    pavucontrol
-    audacity
-    sox
-    ffmpeg
-    ladspa-sdk
 )
 
 # Detectar versión correcta de libfuse2 según la distribución base
@@ -150,13 +226,21 @@ elif apt-cache show libfuse2 >/dev/null 2>&1; then
     APT_PACKAGES+=(libfuse2)
 fi
 
-# Añadir cosmic-store si está empaquetado en los repos de Pop!_OS
-if apt-cache show cosmic-store >/dev/null 2>&1; then
-    APT_PACKAGES+=(cosmic-store)
-fi
-
 log_info "Instalando paquetes: ${APT_PACKAGES[*]}"
 apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
+
+# Instalar librerías gráficas de 32 bits para gaming y Steam si i386 está habilitado
+log_info "Instalando soporte Vulkan/Mesa de 32 bits para Steam..."
+apt-get install -y --no-install-recommends libvulkan1:i386 mesa-vulkan-drivers:i386 || true
+
+# Configuración de usuario Live defokos
+if ! id defokos >/dev/null 2>&1; then
+    log_info "Configurando usuario live 'defokos' con privilegios sudo..."
+    useradd -m -s /bin/bash -G sudo,audio,video,plugdev,netdev defokos || true
+    echo "defokos:defokos" | chpasswd || true
+    echo "defokos ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/defokos
+    chmod 0440 /etc/sudoers.d/defokos
+fi
 
 log_step "5. Instalando paquetes .deb nativos (YouTube Music, Discord, Steam)"
 

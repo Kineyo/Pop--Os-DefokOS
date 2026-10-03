@@ -86,6 +86,18 @@ def generate_icons(source_path, overlay_dir):
     watermark_path = os.path.join(spinner, "watermark.png")
     subprocess.run(["convert", source_path, "-background", "none", "-resize", "x87", watermark_path], check=True)
 
+    # 6. GRUB Theme logo
+    grub_theme_dir = os.path.join(overlay_dir, "boot/grub/themes/pop")
+    os.makedirs(grub_theme_dir, exist_ok=True)
+    with open(os.path.join(grub_theme_dir, "logo.png"), "wb") as f:
+        f.write(cache[128][0])
+
+    # 7. Calamares branding logo
+    calamares_dir = os.path.join(overlay_dir, "etc/calamares/branding/defokos")
+    os.makedirs(calamares_dir, exist_ok=True)
+    with open(os.path.join(calamares_dir, "logo.png"), "wb") as f:
+        f.write(cache[128][0])
+
     print("Icons successfully generated and deployed to overlay.")
     return True
 

@@ -62,4 +62,16 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     done
 fi
 
+log_step "7. Actualizando caché de fuentes del sistema (Pixelify Sans)"
+if command -v fc-cache >/dev/null 2>&1; then
+    log_info "Registrando Pixelify Sans en fc-cache..."
+    fc-cache -fv /usr/share/fonts/ 2>/dev/null || true
+fi
+
+log_step "8. Actualizando configuración de arranque y fondo de pantalla de bootloader"
+if command -v update-grub >/dev/null 2>&1; then
+    log_info "Actualizando GRUB con fondo de arranque temático..."
+    update-grub 2>/dev/null || true
+fi
+
 log_success "Personalización visual y branding de DefokOS aplicados exitosamente."

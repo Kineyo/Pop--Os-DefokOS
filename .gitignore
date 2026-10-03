@@ -17,3 +17,5 @@ debs/
 *~
 .idea/
 .vscode/
+*.log
+
