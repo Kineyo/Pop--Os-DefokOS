@@ -777,13 +777,20 @@ EOF
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/partition.conf"
 ---
 efiSystemPartition: "/boot/efi"
+efiSystemPartitionSize: 512M
 userSwapChoices:
     - none
     - file
-initialSwapChoice: file
+initialSwapChoice: none
 drawNestedPartitions: true
 defaultFileSystemType: "ext4"
 availableFileSystemTypes: ["ext4", "btrfs"]
+defaultPartitionTableType: gpt
+partitionLayout:
+    - name: "root"
+      filesystem: "ext4"
+      mountPoint: "/"
+      size: 100%
 EOF
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/users.conf"
