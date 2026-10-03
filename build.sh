@@ -55,9 +55,8 @@ ISO_MOUNT_DIR="${WORK_DIR}/iso_mount"
 ISO_EXTRACT_DIR="${WORK_DIR}/iso_extracted"
 CHROOT_DIR="${WORK_DIR}/squashfs_root"
 
-# URL oficial de la ISO base (Pop!_OS Intel/AMD).
-# System76 migró sus imágenes a iso.pop-os.org
-DEFAULT_BASE_URL="https://iso.pop-os.org/22.04/amd64/intel/58/pop-os_22.04_amd64_intel_58.iso"
+# URL oficial de la ISO base Pop!_OS 24.04 LTS con COSMIC Desktop (Wayland)
+DEFAULT_BASE_URL="https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso"
 BASE_ISO_URL="${BASE_ISO_URL:-${DEFAULT_BASE_URL}}"
 
 # Nombre de la ISO resultante
@@ -203,8 +202,14 @@ if [[ -n "${LOCAL_BASE_ISO}" ]]; then
 # 2. Si ya existe un archivo base.iso en work/
 elif [[ -f "${BASE_ISO_FILE}" ]]; then
     CACHED_SIZE=$(stat -c%s "${BASE_ISO_FILE}" 2>/dev/null || echo 0)
-    # Una ISO de Pop!_OS pesa aproximadamente ~2.5 GB a 3 GB. Mínimo 500 MB para considerarla válida
-    if [[ $CACHED_SIZE -lt 500000000 ]]; then
+    # Detectar si la imagen en caché pertenece a la versión 22.04 anterior (GNOME/X11)
+    if file "${BASE_ISO_FILE}" 2>/dev/null | grep -qi "22\.04"; then
+        log_warn "Se detectó que la ISO en caché es Pop!_OS 22.04 (versión previa con GNOME/X11)."
+        log_warn "Purgando caché antigua para actualizar a Pop!_OS 24.04 LTS con COSMIC Desktop nativo..."
+        rm -f "${BASE_ISO_FILE}"
+        rm -rf "${ISO_EXTRACT_DIR}" "${CHROOT_DIR}"
+        NEED_DOWNLOAD=true
+    elif [[ $CACHED_SIZE -lt 500000000 ]]; then
         log_warn "Se encontró un archivo base.iso en caché pero está incompleto o dañado ($(( CACHED_SIZE / 1024 / 1024 )) MB)."
         log_warn "Eliminándolo y procediendo a descargar la imagen oficial..."
         rm -f "${BASE_ISO_FILE}"

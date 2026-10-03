@@ -6,7 +6,7 @@ on:
       base_iso_url:
         description: 'URL de la ISO base de Pop!_OS'
         required: false
-        default: 'https://iso.pop-os.org/22.04/amd64/intel/58/pop-os_22.04_amd64_intel_58.iso'
+        default: 'https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso'
       create_release:
         description: '¿Publicar automáticamente en GitHub Releases?'
         required: true
@@ -70,7 +70,7 @@ jobs:
 
       - name: Execute ISO Build
         env:
-          BASE_ISO_URL: ${{ github.event.inputs.base_iso_url || 'https://iso.pop-os.org/22.04/amd64/intel/58/pop-os_22.04_amd64_intel_58.iso' }}
+          BASE_ISO_URL: ${{ github.event.inputs.base_iso_url || 'https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso' }}
           COMPRESSION: 'zstd'
         run: |
           sudo -E ./build.sh
