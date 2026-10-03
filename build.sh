@@ -39,9 +39,10 @@ log_err()     { echo -e "${C_BOLD}${C_RED}[BUILD:ERROR]${C_RESET} $*" >&2; }
 
 # --- Ayuda preliminar sin requerir sudo ---
 if [[ " $* " =~ " --help " ]] || [[ " $* " =~ " -h " ]]; then
-    echo "Uso: sudo $0 [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
+    echo "Uso: sudo $0 [--clean] [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
     echo ""
     echo "Opciones:"
+    echo "  --clean                 Elimina completamente la base anterior para una reconstrucción 100% limpia"
     echo "  --bootstrap             Construye el sistema desde cero vía debootstrap y repositorios oficiales System76"
     echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
     echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
@@ -81,12 +82,19 @@ DEFOKOS_VERSION="24.04"
 ISO_OUTPUT_NAME="DefokOS-${DEFOKOS_VERSION}-amd64-${DATE_TAG}.iso"
 VOLUME_LABEL="DEFOKOS_24_04"
 
-# Parámetros opcionales
+# Parámetros opcionales con valores predeterminados seguros (evita errores con set -u)
 LOCAL_BASE_ISO=""
 BOOTSTRAP=false
+PACK_ONLY=false
+REPACK=false
+CLEAN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --clean)
+            CLEAN=true
+            shift
+            ;;
         --bootstrap)
             BOOTSTRAP=true
             shift
@@ -104,9 +112,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "Uso: sudo $0 [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
+            echo "Uso: sudo $0 [--clean] [--bootstrap] [--repack] [--pack-only] [--iso /ruta/a/base.iso]"
             echo ""
             echo "Opciones:"
+            echo "  --clean                 Elimina completamente la base anterior para una reconstrucción 100% limpia"
             echo "  --bootstrap             Construye el sistema desde cero vía debootstrap y repositorios oficiales System76"
             echo "  --repack                Aplica overlay al chroot existente y recomprime SquashFS e ISO (~2-3 min)"
             echo "  --pack-only             Omite aprovisionamiento y SquashFS; empaqueta la ISO directamente (~10 seg)"
@@ -146,6 +155,20 @@ fi
 
 BASE_ISO_FILE="${LOCAL_BASE_ISO:-${WORK_DIR}/base.iso}"
 BOOT_OPTS_FILE="${WORK_DIR}/el_torito_opts.txt"
+
+# Limpieza preventiva si se detecta que work/base.iso es la versión 22.04 obsoleta
+if [[ -f "${WORK_DIR}/base.iso" ]]; then
+    if file "${WORK_DIR}/base.iso" 2>/dev/null | grep -qi "22\.04"; then
+        log_warn "Se detectó Pop!_OS 22.04 obsoleta en work/base.iso. Eliminando para garantizar base limpia de 24.04..."
+        rm -f "${WORK_DIR}/base.iso"
+    fi
+fi
+
+# Si se activó --clean, purgar todo el árbol previo
+if [[ "${CLEAN}" == "true" ]]; then
+    log_warn "Opción --clean activada: Purgando chroot y archivos temporales anteriores..."
+    rm -rf "${CHROOT_DIR}" "${ISO_EXTRACT_DIR}" "${ISO_MOUNT_DIR}" "${WORK_DIR}/base.iso" "${BOOT_OPTS_FILE}"
+fi
 
 # --- Manejador de Limpieza y Salida Segura (Trap) ---
 cleanup_mounts() {
@@ -197,11 +220,15 @@ for dep in "${DEPENDENCIES[@]}"; do
 done
 
 if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
-    log_err "Faltan las siguientes dependencias en el sistema anfitrión: ${MISSING_DEPS[*]}"
-    log_err "Instálalas con: apt-get update && apt-get install -y xorriso squashfs-tools curl rsync coreutils"
-    exit 1
+    log_warn "Faltan las siguientes dependencias en el sistema anfitrión: ${MISSING_DEPS[*]}"
+    log_info "Instalando dependencias faltantes automáticamente..."
+    apt-get update -y && apt-get install -y xorriso squashfs-tools curl rsync coreutils debootstrap mtools || {
+        log_err "No se pudieron instalar automáticamente. Por favor instálalas con:"
+        log_err "  sudo apt-get update && sudo apt-get install -y xorriso squashfs-tools curl rsync coreutils debootstrap mtools"
+        exit 1
+    }
 fi
-log_success "Todas las dependencias del host están presentes."
+log_success "Todas las dependencias del host están listas."
 
 # ==============================================================================
 # PASO 2: PREPARACIÓN DE DIRECTORIOS DE TRABAJO
@@ -629,12 +656,19 @@ XORRISO_ARGS=(
     -V "${VOLUME_LABEL}"
     -o "${FINAL_ISO_PATH}"
     -J -l
-    -b isolinux/isolinux.bin
-    -c isolinux/boot.cat
-    -no-emul-boot
-    -boot-load-size 4
-    -boot-info-table
 )
+
+# Soporte ISOLINUX tradicional sólo si isolinux.bin existe
+if [[ -f "${ISO_EXTRACT_DIR}/isolinux/isolinux.bin" ]]; then
+    log_info "Añadiendo soporte de arranque ISOLINUX tradicional..."
+    XORRISO_ARGS+=(
+        -b isolinux/isolinux.bin
+        -c isolinux/boot.cat
+        -no-emul-boot
+        -boot-load-size 4
+        -boot-info-table
+    )
+fi
 
 # Soporte EFI si existe imagen efi.img
 if [[ -n "${EFI_IMG}" ]]; then

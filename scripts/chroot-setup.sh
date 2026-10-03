@@ -226,8 +226,24 @@ elif apt-cache show libfuse2 >/dev/null 2>&1; then
     APT_PACKAGES+=(libfuse2)
 fi
 
-log_info "Instalando paquetes: ${APT_PACKAGES[*]}"
-apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
+# Filtrar paquetes disponibles en los repositorios
+INSTALLABLE_PACKAGES=()
+for pkg in "${APT_PACKAGES[@]}"; do
+    if apt-cache show "$pkg" >/dev/null 2>&1; then
+        INSTALLABLE_PACKAGES+=("$pkg")
+    else
+        log_warn "Paquete no encontrado en repositorios APT: $pkg (omitiendo...)"
+    fi
+done
+
+log_info "Instalando paquetes principales (${#INSTALLABLE_PACKAGES[@]} paquetes detectados)..."
+apt-get install -y --no-install-recommends "${INSTALLABLE_PACKAGES[@]}" || {
+    log_warn "Error en instalación masiva. Ejecutando instalación individual con resolución de dependencias..."
+    for pkg in "${INSTALLABLE_PACKAGES[@]}"; do
+        apt-get install -y --no-install-recommends "$pkg" || log_warn "No se pudo instalar $pkg"
+    done
+    apt-get install -f -y --no-install-recommends || true
+}
 
 # Instalar librerías gráficas de 32 bits para gaming y Steam si i386 está habilitado
 log_info "Instalando soporte Vulkan/Mesa de 32 bits para Steam..."
