@@ -998,6 +998,32 @@ exec sudo -E env \
 EOF
 chmod +x "${OVERLAY_DIR}/usr/local/bin/calamares-launch"
 
+# Módulo Python toml para el módulo displaymanager/greetd de Calamares
+mkdir -p "${OVERLAY_DIR}/usr/lib/python3/dist-packages"
+cat << 'EOF' > "${OVERLAY_DIR}/usr/lib/python3/dist-packages/toml.py"
+import tomllib
+
+def load(f):
+    c = f.read() if hasattr(f, 'read') else f
+    return tomllib.loads(c.decode('utf-8') if isinstance(c, bytes) else c)
+
+def loads(s):
+    return tomllib.loads(s.decode('utf-8') if isinstance(s, bytes) else s)
+
+def dumps(data):
+    res = []
+    for sec, val in data.items():
+        if isinstance(val, dict):
+            res.append(f"[{sec}]")
+            for k, v in val.items():
+                res.append(f'{k} = "{v}"' if isinstance(v, str) else f'{k} = {v}')
+            res.append("")
+    return "\n".join(res)
+
+def dump(data, f):
+    f.write(dumps(data))
+EOF
+
 # Desktop Entry y Autostart
 cat << 'EOF' > "${OVERLAY_DIR}/usr/share/applications/io.calamares.calamares.desktop"
 [Desktop Entry]
