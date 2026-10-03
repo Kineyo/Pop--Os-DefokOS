@@ -867,6 +867,78 @@ style:
    SidebarText:          "#ffffff"
    SidebarTextSelect:    "#24272e"
    SidebarTextHighlight: "#b49fcc"
+sidebar:                 widget
+navigation:              widget
+slideshow:               "show.qml"
+slideshowAPI:            2
+EOF
+
+# Slideshow interactivo QML para Calamares
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/branding/defokos/show.qml"
+import QtQuick 2.0;
+import calamares.slideshow 1.0;
+
+Presentation
+{
+    id: presentation
+
+    function nextSlide() {
+        presentation.goToNextSlide();
+    }
+
+    Timer {
+        id: advanceTimer
+        interval: 6000
+        running: presentation.activatedInCalamares
+        repeat: true
+        onTriggered: nextSlide()
+    }
+
+    Slide {
+        Image {
+            id: background1
+            source: "welcome.png"
+            width: 360; height: 200
+            fillMode: Image.PreserveAspectFit
+            anchors.centerIn: parent
+        }
+        Text {
+            anchors.horizontalCenter: background1.horizontalCenter
+            anchors.top: background1.bottom
+            anchors.topMargin: 12
+            text: "<b>DefokOS 24.04 LTS (Utane Uta Edition)</b><br/>Entorno COSMIC Desktop Wayland puro, optimizado y ultrarrápido."
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            color: "#ffffff"
+        }
+    }
+
+    Slide {
+        Image {
+            id: background2
+            source: "logo.png"
+            width: 160; height: 160
+            fillMode: Image.PreserveAspectFit
+            anchors.centerIn: parent
+        }
+        Text {
+            anchors.horizontalCenter: background2.horizontalCenter
+            anchors.top: background2.bottom
+            anchors.topMargin: 12
+            text: "<b>Software y Multimedia Nativo</b><br/>Discord, Steam, YouTube Music, PipeWire y aceleración Vulkan/Mesa."
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            color: "#ffffff"
+        }
+    }
+
+    function onActivate() {
+        presentation.currentSlide = 0;
+    }
+
+    function onLeave() {
+    }
+}
 EOF
 
 if [[ -f "${ASSETS_DIR}/boot_background_1080p.png" ]]; then
@@ -1349,8 +1421,18 @@ log_info "Compilando binario de arranque UEFI con GRUB standalone..."
 cat << 'EOF' > "${WORK_DIR}/grub-embedded.cfg"
 search --file --set=root /casper/vmlinuz
 set prefix=($root)/boot/grub
-source $prefix/grub.cfg
+configfile ($root)/boot/grub/grub.cfg
 EOF
+
+# Copiar módulos de GRUB x86_64-efi a la estructura de la ISO para carga dinámica sin errores
+mkdir -p "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi"
+if [[ -d "/usr/lib/grub/x86_64-efi" ]]; then
+    cp -rf /usr/lib/grub/x86_64-efi/*.mod "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
+    cp -rf /usr/lib/grub/x86_64-efi/*.lst "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
+elif [[ -d "${CHROOT_DIR}/usr/lib/grub/x86_64-efi" ]]; then
+    cp -rf "${CHROOT_DIR}"/usr/lib/grub/x86_64-efi/*.mod "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
+    cp -rf "${CHROOT_DIR}"/usr/lib/grub/x86_64-efi/*.lst "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
+fi
 
 if command -v grub-mkstandalone >/dev/null 2>&1; then
     grub-mkstandalone \
@@ -1358,6 +1440,7 @@ if command -v grub-mkstandalone >/dev/null 2>&1; then
         --output="${ISO_EXTRACT_DIR}/EFI/BOOT/BOOTX64.EFI" \
         --locales="" \
         --fonts="" \
+        --modules="all_video efi_gop efi_uga font gfxterm gfxmenu png part_gpt part_msdos iso9660 fat normal test echo" \
         "boot/grub/grub.cfg=${WORK_DIR}/grub-embedded.cfg"
 else
     chroot "${CHROOT_DIR}" grub-mkstandalone \
@@ -1365,6 +1448,7 @@ else
         --output="/boot/bootx64.efi" \
         --locales="" \
         --fonts="" \
+        --modules="all_video efi_gop efi_uga font gfxterm gfxmenu png part_gpt part_msdos iso9660 fat normal test echo" \
         "boot/grub/grub.cfg=${WORK_DIR}/grub-embedded.cfg"
     cp -f "${CHROOT_DIR}/boot/bootx64.efi" "${ISO_EXTRACT_DIR}/EFI/BOOT/BOOTX64.EFI"
 fi
@@ -1418,6 +1502,7 @@ if [[ -f /usr/lib/ISOLINUX/isolinux.bin ]]; then
 
     cat << 'EOF' > "${ISO_EXTRACT_DIR}/isolinux/isolinux.cfg"
 UI vesamenu.c32
+MENU NO-MOUSE
 TIMEOUT 100
 PROMPT 0
 
