@@ -55,9 +55,9 @@ ISO_MOUNT_DIR="${WORK_DIR}/iso_mount"
 ISO_EXTRACT_DIR="${WORK_DIR}/iso_extracted"
 CHROOT_DIR="${WORK_DIR}/squashfs_root"
 
-# URL de la ISO base (Pop!_OS Intel/AMD). Puede ser sobreescrita mediante la variable de entorno BASE_ISO_URL
-# Por defecto se utiliza Pop!_OS 22.04 LTS / 24.04
-DEFAULT_BASE_URL="https://pop-iso.sfo2.cdn.digitaloceanspaces.com/22.04/amd64/intel/latest/pop-os_22.04_amd64_intel_latest.iso"
+# URL oficial de la ISO base (Pop!_OS Intel/AMD).
+# System76 migró sus imágenes a iso.pop-os.org
+DEFAULT_BASE_URL="https://iso.pop-os.org/22.04/amd64/intel/58/pop-os_22.04_amd64_intel_58.iso"
 BASE_ISO_URL="${BASE_ISO_URL:-${DEFAULT_BASE_URL}}"
 
 # Nombre de la ISO resultante
@@ -166,10 +166,19 @@ if [[ -n "${LOCAL_BASE_ISO}" ]] && [[ -f "${LOCAL_BASE_ISO}" ]]; then
     BASE_ISO_FILE="${LOCAL_BASE_ISO}"
 elif [[ -f "${BASE_ISO_FILE}" ]]; then
     log_info "Se encontró una imagen base en caché: ${BASE_ISO_FILE}"
-else
     log_info "Descargando imagen ISO base desde:"
     log_info "  ${BASE_ISO_URL}"
-    curl -L -C - --fail --progress-bar -o "${BASE_ISO_FILE}.tmp" "${BASE_ISO_URL}"
+    if ! curl -L -C - --fail --progress-bar -o "${BASE_ISO_FILE}.tmp" "${BASE_ISO_URL}"; then
+        log_err "Error crítico al descargar la ISO base (Código de salida de curl: $?)."
+        log_err "URL intentada: ${BASE_ISO_URL}"
+        log_err "Posibles causas:"
+        log_err "  1. La máquina no tiene conexión a Internet o falló la resolución DNS (código 6)."
+        log_err "  2. El enlace remoto ha caducado o cambió."
+        log_err "Solución: Puedes descargar manualmente cualquier ISO de Pop!_OS y ejecutar:"
+        log_err "  sudo $0 --iso /ruta/a/tu/imagen.iso"
+        rm -f "${BASE_ISO_FILE}.tmp" 2>/dev/null || true
+        exit 6
+    fi
     mv "${BASE_ISO_FILE}.tmp" "${BASE_ISO_FILE}"
     log_success "Descarga de ISO base completada."
 fi
