@@ -1,0 +1,32 @@
+---
+componentName:       defokos
+welcomeStyleCalamares: false
+welcomeExpandingLogo: true
+windowExpanding:     normal
+windowSize:          800px,520px
+windowPlacement:     center
+strings:
+    productName:         DefokOS
+    shortProductName:    DefokOS
+    version:             24.04 LTS
+    shortVersion:        24.04
+    versionedName:       DefokOS 24.04 LTS (Utane Uta Edition)
+    shortVersionedName:  DefokOS 24.04
+    bootloaderEntryName: DefokOS
+    productUrl:          https://github.com/defokos
+    supportUrl:          https://github.com/defokos/issues
+    knownIssuesUrl:      https://github.com/defokos/issues
+    releaseNotesUrl:     https://github.com/defokos
+images:
+    productLogo:         "logo.png"
+    productIcon:         "logo.png"
+    productWelcome:      "welcome.png"
+style:
+   SidebarBackground:    "#24272e"
+   SidebarText:          "#ffffff"
+   SidebarTextSelect:    "#24272e"
+   SidebarTextHighlight: "#b49fcc"
+sidebar:                 widget
+navigation:              widget
+slideshow:               "show.qml"
+slideshowAPI:            2

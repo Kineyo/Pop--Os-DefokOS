@@ -1,16 +1,16 @@
-# DefokOS // Utane Uta Edition 🎙️🔧
+# DefokOS // Utane Uta Edition
 
-> **Distribución Linux personalizada basada en Pop!_OS (COSMIC Desktop)** con temática industrial retro inspirada en **Defoko / Utane Uta** (Utaloid Project 01). Diseñada para creadores sonoros, entusiastas de la síntesis de voz y desarrolladores de software.
+> **Distribución Linux personalizada basada en Pop!_OS 24.04 LTS (COSMIC Desktop)** con temática inspirada en **Defoko / Utane Uta** (Utaloid Project 01). Diseñada para fans del personaje.
 
 ---
-
+ 
 ## 🎨 Identidad Visual y Estética
 
 - **Color Primario (Acento):** `#b49fcc` (Lavanda Defoko)
 - **Color de Fondo / Base:** `#24272e` (Carbón Industrial Oscuro)
 - **Acentos Secundarios:** `#6f737e` (Gris Pizarra), `#88c0d0` (Cian de Señal Synth), `#ded8e6` (Seda Clara)
 - **Entorno de Escritorio:** **COSMIC Desktop** (Pop!_OS) en modo oscuro nativo.
-- **Tipografía Predeterminada:** JetBrains Mono / Fira Code.
+- **Tipografía Predeterminada:** Pixelify Sans (alias de sans-serif / system-ui vía fontconfig).
 
 ---
 
@@ -24,7 +24,7 @@
 2. **Herramientas para Creadores & Devs:**
    - Terminal predeterminada **Kitty** con tema lavanda/carbón y soporte GPU.
    - **VSCodium** integrado desde su repositorio oficial sin telemetría de Microsoft.
-   - **Steam** preconfigurado para gaming y proton-ge.
+   - **Steam** preconfigurado para gaming y proton.
    - Suite de audio con **PipeWire**, **Audacity**, **pavucontrol**, **sox** y librerías DSP.
    - **Fastfetch** personalizado con arte ASCII de Utane Uta y métricas de audio.
 
@@ -34,7 +34,7 @@
 
 ```text
 DefokOS/
-├── build.sh                       # Script maestro de compilación (requiere sudo)
+├── build.sh                       # Script principal de compilación (requiere sudo)
 ├── scripts/
 │   ├── chroot-setup.sh            # Aprovisionamiento de paquetes y repositorios en chroot
 │   └── apply-theme.sh             # Compilación de schemas, wallpapers y branding
@@ -67,6 +67,7 @@ Para generar la ISO en un sistema Linux local (Debian, Ubuntu, Pop!_OS, etc.):
 ```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
+    debootstrap \
     xorriso \
     squashfs-tools \
     curl \
@@ -79,41 +80,33 @@ sudo apt-get install -y --no-install-recommends \
     coreutils
 ```
 
-> [!NOTE]
+> [!IMPORTANTE]
 > Se recomienda disponer de al menos **30 GB de espacio libre en disco** y **8 GB de memoria RAM** para el desempaquetado y compresión de SquashFS.
 
 ---
 
 ## 🔨 Instrucciones de Construcción
 
-### Opción A: Descarga automática de la base Pop!_OS
-
-Simplemente ejecuta el script maestro con privilegios de superusuario:
+### Compilación completa (desde cero con debootstrap)
 
 ```bash
-chmod +x build.sh scripts/*.sh
+chmod +x build.sh
 sudo ./build.sh
 ```
 
-El script descargará la ISO base de Pop!_OS (si no está ya en caché), extraerá el sistema de archivos, inyectará el overlay, ejecutará el aprovisionamiento dentro de un chroot aislado y construirá la ISO híbrida final en `./out/`.
+`build.sh` **ya no usa una ISO base** de Pop!_OS: construye el sistema raíz con `debootstrap` (Ubuntu noble), configura los repositorios oficiales de Pop!_OS/System76, instala COSMIC desde los repositorios oficiales de [System76](https://github.com/pop-os) en github dentro de un chroot aislado y empaqueta la ISO híbrida (UEFI + BIOS) en `./out/`. Las dependencias del host se instalan automáticamente.
 
-### Opción B: Usando una ISO base local existente
-
-Si ya tienes una ISO de Pop!_OS descargada en tu equipo:
+### Reconstrucciones rápidas
 
 ```bash
-sudo ./build.sh --iso /ruta/a/pop-os_22.04_amd64_intel_latest.iso
+sudo ./build.sh --repack      # Reaplica overlay y aprovisionamiento sobre el chroot existente y recompone la ISO
+sudo ./build.sh --pack-only   # Solo recompone la ISO a partir del chroot existente
 ```
 
-### Opciones y Variables de Entorno
-
-Puedes afinar el proceso mediante variables de entorno:
+### Variables de Entorno
 
 ```bash
-# Cambiar URL de la imagen base:
-sudo BASE_ISO_URL="https://mi-servidor.org/pop-os.iso" ./build.sh
-
-# Cambiar algoritmo de compresión (zstd por defecto, o xz para máxima compresión):
+# Cambiar algoritmo de compresión (zstd por defecto, o xz / gzip):
 sudo COMPRESSION="xz" ./build.sh
 ```
 
@@ -123,9 +116,25 @@ Al terminar, encontrarás la imagen booteable y su hash criptográfico en la car
 
 ---
 
+## ⚙️​ Requerimientos de instalacion.
+
+Al estar basado en **Pop!_OS 24.04 LTS**, sus requerimientos son los mismos que los de la iso original que son
+
+- **Ram Recomendada:** 4 GB RAM, 
+
+- **Almacenamiento Recomendado:** 16 GB storage, 
+
+- **Procesador:** Compatible de 64-bit
+
+- **Clases:** Computadoras con Intel o graficos AMD o Nvidia de la serie 10 o mas antigua (ej. GTX 1060 and previous).
+
+- **Deshabilitar Secure Boot para hacer la instalacion**
+
+**Sitio Oficial de System76 para descargar la iso _Pop! OS_ oficial:** [https://system76.com/download-pop/](https://system76.com/download-pop/)
+
 ## 🌐 Compilación Automatizada en GitHub Actions
 
-El repositorio incluye el flujo de trabajo [build-iso.yml](file:///.github/workflows/build-iso.yml) optimizado para GitHub Actions:
+El repositorio incluye el flujo de trabajo [build-iso.yml](.github/workflows/build-iso.yml) optimizado para GitHub Actions:
 
 1. **Liberación proactiva de espacio:** Desinstala SDKs pesados de la VM de runner (Android, .NET, Haskell, Docker) para garantizar más de 45 GB de disco disponible.
 2. **Ejecución de build.sh:** Descarga la base oficial, aplica los dotfiles y reempaqueta la ISO con soporte UEFI y BIOS.
@@ -135,13 +144,14 @@ El repositorio incluye el flujo de trabajo [build-iso.yml](file:///.github/workf
 
 ## 🎨 Personalización Adicional
 
-- **Añadir o remover paquetes:** Edita el array `APT_PACKAGES` en [scripts/chroot-setup.sh](file:///scripts/chroot-setup.sh).
-- **Modificar dotfiles:** Cualquier archivo que coloques dentro de [overlay/etc/skel/](file:///overlay/etc/skel/) se copiará automáticamente al directorio de inicio de cada nuevo usuario creado en el sistema.
-- **Cambiar el fondo de pantalla:** Reemplaza o añade archivos en [overlay/usr/share/backgrounds/defokos/](file:///overlay/usr/share/backgrounds/defokos/).
-- **Añadir sonidos del sistema:** Coloca archivos `.ogg` en [overlay/usr/share/sounds/defokos/stereo/](file:///overlay/usr/share/sounds/defokos/stereo/).
+- **Añadir o remover paquetes:** Edita el array `APT_PACKAGES` en [scripts/chroot-setup.sh](scripts/chroot-setup.sh).
+- **Modificar dotfiles:** Cualquier archivo que coloques dentro de [overlay/etc/skel/](overlay/etc/skel/) se copiará automáticamente al directorio de inicio de cada nuevo usuario creado en el sistema.
+- **Cambiar el fondo de pantalla:** Reemplaza o añade archivos en [overlay/usr/share/backgrounds/defokos/](overlay/usr/share/backgrounds/defokos/).
+- **Añadir sonidos del sistema:** Coloca archivos `.ogg` en [overlay/usr/share/sounds/defokos/stereo/](overlay/usr/share/sounds/defokos/stereo/).
 
 ---
 
 ## 📄 Licencia
 
-Este proyecto y sus scripts de automatización se distribuyen bajo la licencia MIT. Pop!_OS y COSMIC son marcas y creaciones de System76. Utane Uta / Defoko es un personaje de dominio público originario de la comunidad UTAU (Ameya/Ayame).
+Este proyecto y sus scripts de automatización se distribuyen bajo la licencia MIT. Pop!_OS y COSMIC son marcas y creaciones de [System76](https://github.com/pop-os). Utane Uta / Defoko es un personaje de dominio público originario de la comunidad UTAU (Ameya/Ayame).
+Este es un proyecto tributo hacia **Defoko / Uta Utane** y usa los repositorios publicos de [System76](https://github.com/pop-os) para el entorno cosmic, el gestor de archivos y la interfaz grafica, las imagenes no son mias sino descargadas de internet/Pinterest; Creditos a sus respectivos autores.

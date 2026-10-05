@@ -1,0 +1,14 @@
+[Unit]
+Description=DefokOS Target Disk Post-Install Setup
+ConditionPathExists=/opt/defokos-installer/debs
+ConditionKernelCommandLine=!boot=casper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/defokos-installer/post-install.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

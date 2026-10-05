@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# DEFOKOS LIVE INSTALLER LAUNCHER (Calamares)
+# ==============================================================================
+set -e
+
+# Permitir conexiones al servidor X/Xwayland desde root
+if command -v xhost >/dev/null 2>&1; then
+    xhost +si:localuser:root 2>/dev/null || true
+fi
+
+# Detectar y asegurar montaje del medio live en /cdrom
+if [ ! -f /cdrom/casper/filesystem.squashfs ]; then
+    for cand in /run/initramfs/cdrom /media/cdrom /mnt/cdrom /run/casper*; do
+        if [ -f "$cand/casper/filesystem.squashfs" ]; then
+            mkdir -p /cdrom
+            mount --bind "$cand" /cdrom 2>/dev/null || ln -sfn "$cand" /cdrom 2>/dev/null || true
+            break
+        fi
+    done
+fi
+
+# Salir inmediatamente si el sistema ya está instalado (no live)
+if ! grep -qw 'boot=casper' /proc/cmdline 2>/dev/null; then
+    exit 0
+fi
+
+export DISPLAY="${DISPLAY:-:0}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+if [ -n "${WAYLAND_DISPLAY}" ] && [ -e "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]; then
+    chmod 666 "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" 2>/dev/null || true
+fi
+
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+
+exec sudo -E env \
+    DISPLAY="${DISPLAY}" \
+    WAYLAND_DISPLAY="${WAYLAND_DISPLAY}" \
+    XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+    QT_QPA_PLATFORM="${QT_QPA_PLATFORM}" \
+    /usr/bin/calamares -d "$@"

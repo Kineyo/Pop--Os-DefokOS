@@ -18,4 +18,5 @@ debs/
 .idea/
 .vscode/
 *.log
+.defokos-fix-backup-20261003-165330/
 

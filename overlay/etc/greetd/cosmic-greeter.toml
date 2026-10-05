@@ -1,0 +1,13 @@
+[terminal]
+vt = "1"
+
+[general]
+service = "cosmic-greeter"
+
+[initial_session]
+command = "cosmic-session"
+user = "defokos"
+
+[default_session]
+command = "cosmic-greeter-start"
+user = "cosmic-greeter"

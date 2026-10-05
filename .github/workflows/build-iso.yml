@@ -3,10 +3,6 @@ name: Build DefokOS Custom ISO
 on:
   workflow_dispatch:
     inputs:
-      base_iso_url:
-        description: 'URL de la ISO base de Pop!_OS'
-        required: false
-        default: 'https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso'
       create_release:
         description: '¿Publicar automáticamente en GitHub Releases?'
         required: true
@@ -66,11 +62,10 @@ jobs:
 
       - name: Make Scripts Executable
         run: |
-          chmod +x build.sh scripts/*.sh
+          chmod +x build.sh
 
       - name: Execute ISO Build
         env:
-          BASE_ISO_URL: ${{ github.event.inputs.base_iso_url || 'https://iso.pop-os.org/24.04/amd64/generic/28/pop-os_24.04_amd64_generic_28.iso' }}
           COMPRESSION: 'zstd'
         run: |
           sudo -E ./build.sh
@@ -106,27 +101,33 @@ jobs:
           fi
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
+      - name: Prepare Release Notes
+        if: ${{ steps.release_meta.outputs.tag != '' }}
+        run: |
+          {
+            echo "## DefokOS // Utane Uta Edition (${{ steps.release_meta.outputs.tag }})"
+            echo ""
+            echo "Distribución Linux temática basada en Pop!_OS con entorno COSMIC y estética industrial/retro."
+            echo ""
+            echo "### Especificaciones"
+            echo "- **Paleta de Colores**: Lavanda \`#b49fcc\` y Carbón Oscuro \`#24272e\`"
+            echo "- **Entorno de Escritorio**: Pop!_OS COSMIC Desktop"
+            echo "- **Paquetería Base**: Flatpak (Flathub habilitado a nivel de sistema), APT (.deb) y soporte AppImage (FUSE2/FUSE3)."
+            echo "- **Herramientas de Fábrica**: Kitty Terminal, VSCodium, Steam, Discord, YouTube Music, PipeWire Pro Audio, Audacity, pavucontrol."
+            echo ""
+            echo "### Verificación de Integridad (SHA256)"
+            echo '```'
+            cat "${{ steps.artifacts.outputs.sha_path }}"
+            echo '```'
+          } > release-notes.md
+
       - name: Publish to GitHub Releases
         if: ${{ steps.release_meta.outputs.tag != '' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_meta.outputs.tag }}
           name: DefokOS ${{ steps.release_meta.outputs.tag }} (Utane Uta Edition)
-          body: |
-            ## DefokOS // Utane Uta Edition (${{ steps.release_meta.outputs.tag }})
-
-            Distribución Linux temática basada en Pop!_OS con entorno COSMIC y estética industrial/retro.
-            
-            ### Especificaciones
-            - **Paleta de Colores**: Lavanda `#b49fcc` y Carbón Oscuro `#24272e`
-            - **Entorno de Escritorio**: Pop!_OS COSMIC Desktop
-            - **Paquetería Base**: Flatpak (Flathub habilitado a nivel de sistema), APT (.deb) y soporte AppImage out-of-the-box (FUSE2/FUSE3).
-            - **Herramientas de Fábrica**: Kitty Terminal, VSCodium, Steam, Fastfetch, PipeWire Pro Audio, Audacity, pavucontrol.
-
-            ### Verificación de Integridad (SHA256)
-            ```
-            $(cat ${{ steps.artifacts.outputs.sha_path }})
-            ```
+          body_path: release-notes.md
           files: |
             ${{ steps.artifacts.outputs.iso_path }}
             ${{ steps.artifacts.outputs.sha_path }}

@@ -1,0 +1,4 @@
+#!/bin/bash
+if [ -x /opt/defokos-installer/post-install.sh ]; then
+    /bin/bash /opt/defokos-installer/post-install.sh
+fi

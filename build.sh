@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  DEFOKOS LINUX // MASTER COMPILATION ORCHESTRATOR (build.sh)
+#  DEFOKOS LINUX // MAIN COMPILATION ORCHESTRATOR (build.sh)
 #  Construcción desde Cero: Sin ISOs precompiladas // Vía Repositorios Oficiales
 #  Edición: Utane Uta // Base: Pop!_OS 24.04 LTS (Noble) // COSMIC Desktop Wayland
 #  Paleta: Lavanda (#b49fcc) & Pizarra Oscura (#24272e)
@@ -58,7 +58,7 @@ fi
 # --- Elevación Automática de Privilegios a Root ---
 if [[ "${EUID}" -ne 0 ]]; then
     log_warn "Elevando privilegios a superusuario (root)..."
-    exec sudo "$0" "$@"
+    exec sudo -E "$0" "$@"
 fi
 
 # --- Variables y Rutas del Proyecto ---
@@ -147,7 +147,7 @@ if [[ "${PACK_ONLY}" != "true" ]] && [[ "${REPACK}" != "true" ]]; then
     done
     set -e
 
-    rm -rf "${WORK_DIR}" "${OUT_DIR}" "${OVERLAY_DIR}" "${SCRIPTS_DIR}" "${ASSETS_DIR}" "${DEBS_DIR}"
+    rm -rf "${WORK_DIR}" "${OUT_DIR}"
 fi
 
 mkdir -p "${WORK_DIR}" "${OUT_DIR}" "${OVERLAY_DIR}" "${SCRIPTS_DIR}" "${ASSETS_DIR}" "${DEBS_DIR}" "${ISO_EXTRACT_DIR}"
@@ -175,6 +175,11 @@ HOST_DEPS=(
     grub-efi-amd64-bin
     isolinux
     syslinux-common
+    acl
+    gnupg
+    unzip
+    ca-certificates
+    ubuntu-keyring
 )
 
 log_info "Asegurando dependencias en el sistema anfitrión..."
@@ -236,24 +241,43 @@ if [[ ! -f "${FONT_FILE}" ]] || [[ $(stat -c%s "${FONT_FILE}" 2>/dev/null || ech
         "https://github.com/google/fonts/raw/main/ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf" || true
 fi
 
-# 4. Paquetes nativos .deb (YouTube Music, Discord, Steam)
-if [[ ! -f "${DEBS_DIR}/youtube-music.deb" ]]; then
+# 4. Paquetes nativos .deb locales (YouTube Music, Discord, Steam, VSCodium)
+mkdir -p "${DEBS_DIR}"
+if [[ ! -f "${DEBS_DIR}/youtube-music.deb" ]] && ! compgen -G "${DEBS_DIR}/*youtube-music*.deb" > /dev/null; then
     log_info "Descargando YouTube Music Desktop .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/youtube-music.deb" \
         "https://github.com/ytmdesktop/ytmdesktop/releases/download/v2.0.12/youtube-music-desktop-app_2.0.12_amd64.deb" || true
 fi
 
-if [[ ! -f "${DEBS_DIR}/discord.deb" ]]; then
+if [[ ! -f "${DEBS_DIR}/discord.deb" ]] && ! compgen -G "${DEBS_DIR}/*discord*.deb" > /dev/null; then
     log_info "Descargando Discord .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/discord.deb" \
         "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=linux&arch=x64&format=deb" || true
 fi
 
-if [[ ! -f "${DEBS_DIR}/steam.deb" ]]; then
+if [[ ! -f "${DEBS_DIR}/steam.deb" ]] && ! compgen -G "${DEBS_DIR}/*steam*.deb" > /dev/null; then
     log_info "Descargando Steam .deb oficial..."
     curl -fsSL --connect-timeout 20 -o "${DEBS_DIR}/steam.deb" \
         "https://cdn.fastly.steamstatic.com/client/installer/steam.deb" || true
 fi
+
+if [[ ! -f "${DEBS_DIR}/codium.deb" ]] && ! compgen -G "${DEBS_DIR}/*codium*.deb" > /dev/null && ! compgen -G "${DEBS_DIR}/*vscodium*.deb" > /dev/null; then
+    log_info "Descargando VSCodium .deb oficial..."
+    curl -fsSL --connect-timeout 25 -o "${DEBS_DIR}/codium.deb" \
+        "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/codium_1.135.06055_amd64.deb" || true
+fi
+
+# Validar que cada .deb sea un paquete válido (descartar descargas corruptas)
+for deb in "${DEBS_DIR}"/*.deb; do
+    [[ -f "$deb" ]] || continue
+    if ! dpkg-deb --info "$deb" >/dev/null 2>&1; then
+        log_warn "Paquete .deb inválido, se descarta: $deb"
+        rm -f "$deb"
+    fi
+done
+
+log_info "Paquetes .deb listos en ${DEBS_DIR}:"
+ls -lh "${DEBS_DIR}"/*.deb 2>/dev/null || true
 
 # 5. Extensión PreMiD para Firefox
 PREMID_XPI=""
@@ -438,7 +462,7 @@ ff02::1     ip6-allnodes
 ff02::2     ip6-allrouters
 EOF
 
-echo -e "DefokOS 24.04 LTS (Utane Uta Edition) \\n \\l" > "${OVERLAY_DIR}/etc/issue"
+printf '%s\n' 'DefokOS 24.04 LTS (Utane Uta Edition) \n \l' > "${OVERLAY_DIR}/etc/issue"
 echo "DefokOS 24.04 LTS (Utane Uta Edition)" > "${OVERLAY_DIR}/etc/issue.net"
 echo "DefokOS 24.04 LTS (Utane Uta Edition) // COSMIC Desktop Wayland" > "${OVERLAY_DIR}/etc/motd"
 
@@ -446,19 +470,26 @@ cat << 'EOF' > "${OVERLAY_DIR}/etc/casper.conf"
 export USERNAME="defokos"
 export USERFULLNAME="DefokOS Live User"
 export HOST="defokos"
-export BUILD_SYSTEM="DefokOS"
+export BUILD_SYSTEM="Ubuntu"
 export FLAVOUR="DefokOS"
 EOF
 
-# --- 3. Overlay: Repositorios Oficiales de System76 y Llaves GPG ---
-mkdir -p "${OVERLAY_DIR}/etc/apt/sources.list.d" "${OVERLAY_DIR}/etc/apt/trusted.gpg.d" "${OVERLAY_DIR}/usr/share/python-apt/templates"
-echo "# Repositories managed via /etc/apt/sources.list.d/system76.sources" > "${OVERLAY_DIR}/etc/apt/sources.list"
+mkdir -p "${OVERLAY_DIR}/etc/initramfs-tools"
+cat << 'EOF' > "${OVERLAY_DIR}/etc/initramfs-tools/modules"
+overlay
+EOF
+
+# --- 3. Overlay: Repositorios Oficiales de Pop!_OS y Llaves GPG ---
+mkdir -p "${OVERLAY_DIR}/etc/apt/sources.list.d" "${OVERLAY_DIR}/etc/apt/trusted.gpg.d" "${OVERLAY_DIR}/usr/share/keyrings" "${OVERLAY_DIR}/etc/apt/preferences.d" "${OVERLAY_DIR}/etc/apt/apt.conf.d" "${OVERLAY_DIR}/usr/share/python-apt/templates"
+echo "# Repositories managed via /etc/apt/sources.list.d/*.sources" > "${OVERLAY_DIR}/etc/apt/sources.list"
+rm -f "${OVERLAY_DIR}/etc/apt/sources.list.d/system76.sources" "${OVERLAY_DIR}/etc/apt/sources.list.d/ubuntu.sources" 2>/dev/null || true
 
 # Vincular plantillas oficiales de Pop!_OS para aptsources / python-apt
 ln -sf Ubuntu.info "${OVERLAY_DIR}/usr/share/python-apt/templates/Pop.info" 2>/dev/null || true
 ln -sf Ubuntu.mirrors "${OVERLAY_DIR}/usr/share/python-apt/templates/Pop.mirrors" 2>/dev/null || true
 
-cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/sources.list.d/system76.sources"
+# 1. Repositorio Pop!_OS Applications (Proprietary)
+cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/sources.list.d/pop-os-apps.sources"
 X-Repolib-Name: Pop_OS Applications
 Enabled: yes
 Types: deb
@@ -466,27 +497,49 @@ URIs: http://apt.pop-os.org/proprietary
 Suites: noble
 Components: main
 Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+EOF
 
+# 2. Repositorio Pop!_OS Release
+cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/sources.list.d/pop-os-release.sources"
 X-Repolib-Name: Pop_OS Release Sources
 Enabled: yes
-Types: deb
+Types: deb deb-src
 URIs: http://apt.pop-os.org/release
 Suites: noble
 Components: main
 Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+EOF
 
+# 3. Repositorio Pop!_OS System (Ubuntu Mirror Noble)
+cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/sources.list.d/system.sources"
 X-Repolib-Name: Pop_OS System Sources
 Enabled: yes
-Types: deb
+Types: deb deb-src
 URIs: http://apt.pop-os.org/ubuntu
 Suites: noble noble-security noble-updates noble-backports
 Components: main restricted universe multiverse
 Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+X-Repolib-ID: system
+X-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu
 EOF
 
-# Sincronización robusta de llaves GPG de Pop!_OS y Ubuntu (host o keyserver)
-mkdir -p "${OVERLAY_DIR}/etc/apt/trusted.gpg.d" "${OVERLAY_DIR}/usr/share/keyrings"
+chmod 644 "${OVERLAY_DIR}/etc/apt/sources.list.d/"*.sources 2>/dev/null || true
 
+# 4. Pinning prioritario oficial de Pop!_OS (o=pop-os-release -> Pin-Priority 1001)
+cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/preferences.d/pop-default-settings"
+Package: *
+Pin: release o=pop-os-release
+Pin-Priority: 1001
+EOF
+chmod 644 "${OVERLAY_DIR}/etc/apt/preferences.d/pop-default-settings"
+
+# 5. Configuración de Phased-Updates para Pop!_OS
+cat << 'EOF' > "${OVERLAY_DIR}/etc/apt/apt.conf.d/76pop-default-settings"
+APT::Get::Always-Include-Phased-Updates "true";
+EOF
+chmod 644 "${OVERLAY_DIR}/etc/apt/apt.conf.d/76pop-default-settings"
+
+# Sincronización robusta de llaves GPG de Pop!_OS y Ubuntu (host o keyserver)
 POP_KEY="${OVERLAY_DIR}/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg"
 if [[ -s "/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg" ]]; then
     log_info "Copiando llave oficial de Pop!_OS desde el sistema anfitrión..."
@@ -499,6 +552,7 @@ else
     curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o "${POP_KEY}" 2>/dev/null || true
 fi
 cp -f "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
+chmod 644 "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
 
 UBUNTU_KEY="${OVERLAY_DIR}/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg"
 if [[ -s "/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg" ]]; then
@@ -512,12 +566,14 @@ else
     curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${UBUNTU_KEY}" 2>/dev/null || true
 fi
 cp -f "${UBUNTU_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/ubuntu-archive-keyring.gpg" 2>/dev/null || true
+chmod 644 "${UBUNTU_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/ubuntu-archive-keyring.gpg" 2>/dev/null || true
 
 # Verificación de integridad de las llaves
 if [[ ! -s "${POP_KEY}" ]] || [[ $(stat -c%s "${POP_KEY}" 2>/dev/null || echo 0) -lt 500 ]]; then
     log_warn "Reintentando descarga de llave Pop!_OS desde keyserver..."
     curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o "${POP_KEY}" 2>/dev/null || true
     cp -f "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
+    chmod 644 "${POP_KEY}" "${OVERLAY_DIR}/usr/share/keyrings/pop-archive-keyring.gpg" 2>/dev/null || true
 fi
 
 # --- 4. Overlay: Configuración de Fuente por Defecto (Pixelify Sans) ---
@@ -577,8 +633,9 @@ cat << 'EOF' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTk/v1/
 )
 EOF
 
-echo '"DefokOS-Lavender"' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Dark/v1/name"
-echo 'Some((red: 0.7058824, green: 0.6235294, blue: 0.8))' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Dark/v1/accent"
+# El acento personalizado se guarda en el directorio ".Builder" del tema oscuro de COSMIC
+mkdir -p "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Dark.Builder/v1"
+echo 'Some((red: 0.7058824, green: 0.6235294, blue: 0.8))' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Dark.Builder/v1/accent"
 echo 'true' > "${OVERLAY_DIR}/etc/skel/.config/cosmic/com.system76.CosmicTheme.Mode/v1/is_dark"
 
 # COSMIC Dock Favorites (Inyectar instalador al inicio del dock)
@@ -700,9 +757,9 @@ modules-search:
   - local
 
 instances:
-- id:       defokos
-  module:   branding
-  config:   branding.desc
+- id:       postinstall
+  module:   shellprocess
+  config:   shellprocess-postinstall.conf
 
 sequence:
 - show:
@@ -728,6 +785,7 @@ sequence:
   - initramfs
   - grubcfg
   - bootloader
+  - shellprocess@postinstall
   - umount
 - show:
   - finished
@@ -740,6 +798,14 @@ disable-cancel: false
 disable-cancel-during-exec: false
 hide-back-and-next-during-exec: false
 quit-at-end: false
+EOF
+
+cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/shellprocess-postinstall.conf"
+---
+dont-chroot: false
+timeout: 900
+script:
+    - "-/bin/bash /opt/defokos-installer/post-install.sh"
 EOF
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/unpackfs.conf"
@@ -842,7 +908,7 @@ EOF
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/modules/initramfs.conf"
 ---
-kernel: ""
+kernel: all
 EOF
 
 cat << 'EOF' > "${OVERLAY_DIR}/etc/calamares/branding/defokos/branding.desc"
@@ -852,7 +918,7 @@ welcomeStyleCalamares: false
 welcomeExpandingLogo: true
 windowExpanding:     normal
 windowSize:          800px,520px
-windowPosition:      center
+windowPlacement:     center
 strings:
     productName:         DefokOS
     shortProductName:    DefokOS
@@ -964,7 +1030,7 @@ set -e
 
 # Permitir conexiones al servidor X/Xwayland desde root
 if command -v xhost >/dev/null 2>&1; then
-    xhost +si:localuser:root 2>/dev/null || xhost + 2>/dev/null || true
+    xhost +si:localuser:root 2>/dev/null || true
 fi
 
 # Detectar y asegurar montaje del medio live en /cdrom
@@ -979,7 +1045,7 @@ if [ ! -f /cdrom/casper/filesystem.squashfs ]; then
 fi
 
 # Salir inmediatamente si el sistema ya está instalado (no live)
-if [ ! -d /cdrom ] && [ ! -d /rofs ]; then
+if ! grep -qw 'boot=casper' /proc/cmdline 2>/dev/null; then
     exit 0
 fi
 
@@ -1015,15 +1081,31 @@ def load(f):
 def loads(s):
     return tomllib.loads(s.decode('utf-8') if isinstance(s, bytes) else s)
 
+def _fmt(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_fmt(i) for i in v) + "]"
+    return str(v)
+
+def _emit(data, prefix, out):
+    scalars = {k: v for k, v in data.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
+    if prefix and (scalars or not tables):
+        out.append(f"[{prefix}]")
+    for k, v in scalars.items():
+        out.append(f"{k} = {_fmt(v)}")
+    if scalars or prefix:
+        out.append("")
+    for k, v in tables.items():
+        _emit(v, f"{prefix}.{k}" if prefix else k, out)
+
 def dumps(data):
-    res = []
-    for sec, val in data.items():
-        if isinstance(val, dict):
-            res.append(f"[{sec}]")
-            for k, v in val.items():
-                res.append(f'{k} = "{v}"' if isinstance(v, str) else f'{k} = {v}')
-            res.append("")
-    return "\n".join(res)
+    out = []
+    _emit(data, "", out)
+    return "\n".join(out)
 
 def dump(data, f):
     f.write(dumps(data))
@@ -1072,9 +1154,26 @@ if [[ -n "${PREMID_XPI}" ]]; then
     cp -f "${PREMID_XPI}" "${OVERLAY_DIR}/usr/lib/firefox/browser/extensions/support@premid.app.xpi"
 fi
 
-# --- 9. Script de Aprovisionamiento en Chroot (chroot-setup.sh) ---
-cat << 'EOF' > "${SCRIPTS_DIR}/chroot-setup.sh"
+# --- 9. Overlay: Script Post-Instalación (Hook del Instalador) e Inyección de Paquetes ---
+mkdir -p "${OVERLAY_DIR}/opt/defokos-installer/debs" \
+         "${OVERLAY_DIR}/usr/lib/distinst/hooks/post-install" \
+         "${OVERLAY_DIR}/etc/distinst/hooks/post-install" \
+         "${OVERLAY_DIR}/usr/lib/ubiquity/target-config" \
+         "${OVERLAY_DIR}/etc/systemd/system"
+
+# Copia de paquetes .deb locales (Steam, Discord, VSCodium, YouTube Music) a /opt/defokos-installer/debs/
+log_info "Inyectando paquetes locales .deb en ${OVERLAY_DIR}/opt/defokos-installer/debs/..."
+if compgen -G "${DEBS_DIR}/*.deb" > /dev/null; then
+    cp -f "${DEBS_DIR}"/*.deb "${OVERLAY_DIR}/opt/defokos-installer/debs/"
+fi
+
+# Script post-instalación para disco destino (ejecución desatendida en chroot)
+cat << 'EOF' > "${OVERLAY_DIR}/opt/defokos-installer/post-install.sh"
 #!/usr/bin/env bash
+# ==============================================================================
+# DefokOS - Hook de Post-Instalación en Disco Destino (Chroot)
+# Ejecución desatendida para instalación de software local y purga limpia
+# ==============================================================================
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -1082,41 +1181,215 @@ export DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-echo "[CHROOT] Configurando arquitectura i386 para compatibilidad de 32-bit (Steam)..."
+INSTALLER_DIR="/opt/defokos-installer"
+DEBS_DIR="${INSTALLER_DIR}/debs"
+
+echo "[DEFOKOS:POSTINST] Iniciando post-instalación desatendida en disco destino..."
+
+# Habilitar soporte multilib por compatibilidad (Steam)
+dpkg --add-architecture i386 2>/dev/null || true
+
+# 1. Instalar los 4 programas usando dpkg -i /opt/defokos-installer/debs/*.deb
+if [ -d "${DEBS_DIR}" ] && compgen -G "${DEBS_DIR}/*.deb" > /dev/null; then
+    echo "[DEFOKOS:POSTINST] Instalando paquetes locales con dpkg..."
+    dpkg --force-confdef --force-confold -i "${DEBS_DIR}"/*.deb || true
+
+    # 2. Forzar la resolución de dependencias con apt-get install -f -y
+    echo "[DEFOKOS:POSTINST] Forzando resolución de dependencias con apt-get install -f -y..."
+    apt-get update -y || true
+    apt-get install -f -y || echo "[DEFOKOS:POSTINST] WARN: apt-get install -f falló (¿sin red?)"
+else
+    echo "[DEFOKOS:POSTINST] No se encontraron paquetes .deb para instalar."
+fi
+
+# 3. Purga destructiva de /opt/defokos-installer/debs/
+echo "[DEFOKOS:POSTINST] Ejecutando purga destructiva de paquetes temporales..."
+rm -rf "${DEBS_DIR}"
+rm -rf "${INSTALLER_DIR}" 2>/dev/null || true
+
+# 4. Eliminar cachés (apt-get clean, apt-get autoremove -y)
+echo "[DEFOKOS:POSTINST] Limpiando cachés de APT y paquetes huérfanos..."
+apt-get autoremove -y --purge || true
+apt-get clean -y || true
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/*.bin /tmp/* /var/tmp/* 2>/dev/null || true
+
+# 5. Borrar logs temporales para no dejar rastro
+echo "[DEFOKOS:POSTINST] Eliminando logs temporales..."
+find /var/log -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
+rm -f /var/log/dpkg.log* /var/log/apt/* /var/log/defokos*.log 2>/dev/null || true
+
+# 6. Limpiar artefactos de la sesión Live que NO deben quedar en el sistema instalado
+echo "[DEFOKOS:POSTINST] Eliminando artefactos de la sesión Live..."
+rm -f /etc/sudoers.d/defokos 2>/dev/null || true
+rm -f /etc/xdg/autostart/io.calamares.calamares.desktop /usr/share/applications/io.calamares.calamares.desktop 2>/dev/null || true
+rm -f /home/*/Desktop/install-defokos.desktop /etc/skel/Desktop/install-defokos.desktop 2>/dev/null || true
+for fav in /usr/share/cosmic/com.system76.CosmicAppList/v1/favorites \
+           /etc/skel/.config/cosmic/com.system76.CosmicAppList/v1/favorites \
+           /home/*/.config/cosmic/com.system76.CosmicAppList/v1/favorites; do
+    if [ -f "$fav" ]; then sed -i '/"io.calamares.calamares"/d' "$fav" 2>/dev/null || true; fi
+done
+# El autologin del usuario Live (initial_session) impediría iniciar sesión en el sistema instalado
+if [ -f /etc/greetd/cosmic-greeter.toml ]; then
+    sed -i '/^\[initial_session\]/,/^$/d' /etc/greetd/cosmic-greeter.toml 2>/dev/null || true
+fi
+# Eliminar el usuario Live (defokos:defokos) solo si existe otro usuario normal
+if id defokos >/dev/null 2>&1; then
+    OTHER_USERS="$(getent passwd | awk -F: '$3>=1000 && $3<60000 && $1!="defokos" {print $1}')"
+    if [ -n "${OTHER_USERS}" ]; then
+        userdel -r defokos 2>/dev/null || true
+    fi
+fi
+
+# Desactivar y remover servicio de primera ejecución si existiera
+systemctl disable defokos-postinstall.service 2>/dev/null || true
+rm -f /etc/systemd/system/defokos-postinstall.service 2>/dev/null || true
+
+echo "[DEFOKOS:POSTINST] Instalación de software completada y sistema 100% limpio."
+exit 0
+EOF
+
+# Hooks para instalador oficial Pop!_OS (distinst) y Ubiquity
+cat << 'EOF' > "${OVERLAY_DIR}/usr/lib/distinst/hooks/post-install/99-defokos-postinstall"
+#!/bin/bash
+if [ -x /opt/defokos-installer/post-install.sh ]; then
+    /bin/bash /opt/defokos-installer/post-install.sh
+fi
+EOF
+chmod +x "${OVERLAY_DIR}/usr/lib/distinst/hooks/post-install/99-defokos-postinstall"
+cp -f "${OVERLAY_DIR}/usr/lib/distinst/hooks/post-install/99-defokos-postinstall" "${OVERLAY_DIR}/etc/distinst/hooks/post-install/99-defokos-postinstall"
+cp -f "${OVERLAY_DIR}/usr/lib/distinst/hooks/post-install/99-defokos-postinstall" "${OVERLAY_DIR}/usr/lib/ubiquity/target-config/99-defokos-postinstall"
+
+# Servicio de contingencia systemd
+cat << 'EOF' > "${OVERLAY_DIR}/etc/systemd/system/defokos-postinstall.service"
+[Unit]
+Description=DefokOS Target Disk Post-Install Setup
+ConditionPathExists=/opt/defokos-installer/debs
+ConditionKernelCommandLine=!boot=casper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/defokos-installer/post-install.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chmod 755 "${OVERLAY_DIR}/opt/defokos-installer" "${OVERLAY_DIR}/opt/defokos-installer/debs" "${OVERLAY_DIR}/opt/defokos-installer/post-install.sh"
+chmod 644 "${OVERLAY_DIR}/opt/defokos-installer/debs"/*.deb 2>/dev/null || true
+
+# --- 10. Script de Aprovisionamiento en Chroot (chroot-setup.sh) ---
+cat << 'CHROOT_SETUP_EOF' > "${SCRIPTS_DIR}/chroot-setup.sh"
+#!/usr/bin/env bash
+# ==============================================================================
+# DEFOKOS LINUX // CHROOT PROVISIONING SCRIPT (chroot-setup.sh)
+# Ecosistema Pop!_OS 24.04 LTS (Noble) // COSMIC Desktop // Repositorios Oficiales
+# ==============================================================================
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+export DEBCONF_NONINTERACTIVE_SEEN=true
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
+
+# Evitar prompts de conffiles (p.ej. /etc/casper.conf del overlay) conservando la versión del overlay
+cat > /etc/apt/apt.conf.d/99defokos-noninteractive << 'APTCONF_EOF'
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+APTCONF_EOF
+
+echo "[CHROOT] === Configurando arquitectura i386 para soporte multilib (Steam) ==="
 dpkg --add-architecture i386 || true
 
-echo "[CHROOT] Asegurando certificados y herramientas base..."
+echo "[CHROOT] === Instalando y verificando paquetes base de red y criptografía ==="
 apt-get update -y || true
-apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release software-properties-common
+apt-get install -y --no-install-recommends ca-certificates curl gnupg gpg dirmngr lsb-release software-properties-common
 
-echo "[CHROOT] Verificando llaves oficiales de Pop!_OS y repositorios System76..."
-mkdir -p /etc/apt/trusted.gpg.d /usr/share/keyrings
-if [ ! -s /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg ] || [ $(stat -c%s /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg 2>/dev/null || echo 0) -lt 500 ]; then
-    echo "[CHROOT] Descargando llave oficial de Pop!_OS desde keyserver..."
-    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg || true
+# ==============================================================================
+# 1. CONFIGURACIÓN DE REPOSITORIOS OFICIALES POP!_OS Y FIRMAS GPG
+# ==============================================================================
+echo "[CHROOT] === Configurando repositorios oficiales y llaves GPG de Pop!_OS ==="
+
+mkdir -p /etc/apt/trusted.gpg.d /usr/share/keyrings /etc/apt/sources.list.d /etc/apt/preferences.d /etc/apt/apt.conf.d
+
+# Llave Pop!_OS Archive (2017)
+# Fingerprint: 63C46DF0140D738961429F4E204DD8AEC33A7AFF
+POP_KEY_PATH="/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg"
+if [ ! -s "${POP_KEY_PATH}" ] || [ $(stat -c%s "${POP_KEY_PATH}" 2>/dev/null || echo 0) -lt 500 ]; then
+    echo "[CHROOT] Obteniendo llave oficial de Pop!_OS desde keyserver..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x63C46DF0140D738961429F4E204DD8AEC33A7AFF" | gpg --dearmor -o "${POP_KEY_PATH}" || true
 fi
-cp -f /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg /usr/share/keyrings/pop-archive-keyring.gpg 2>/dev/null || true
+cp -f "${POP_KEY_PATH}" /usr/share/keyrings/pop-archive-keyring.gpg 2>/dev/null || true
+chmod 644 "${POP_KEY_PATH}" /usr/share/keyrings/pop-archive-keyring.gpg 2>/dev/null || true
 
-if [ ! -s /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg ] || [ $(stat -c%s /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg 2>/dev/null || echo 0) -lt 500 ]; then
-    echo "[CHROOT] Descargando llave oficial de Ubuntu desde keyserver..."
-    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg || true
+# Llave Ubuntu Archive (2018)
+# Fingerprint: F6ECB3762474EDA9D21B7022871920D1991BC93C / 871920D1991BC93C
+UBUNTU_KEY_PATH="/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg"
+if [ ! -s "${UBUNTU_KEY_PATH}" ] || [ $(stat -c%s "${UBUNTU_KEY_PATH}" 2>/dev/null || echo 0) -lt 500 ]; then
+    echo "[CHROOT] Obteniendo llave oficial de Ubuntu desde keyserver..."
+    curl -fsSL --connect-timeout 15 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" | gpg --dearmor -o "${UBUNTU_KEY_PATH}" || true
 fi
-cp -f /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null || true
+cp -f "${UBUNTU_KEY_PATH}" /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null || true
+chmod 644 "${UBUNTU_KEY_PATH}" /usr/share/keyrings/ubuntu-archive-keyring.gpg 2>/dev/null || true
 
-# Limpiar /etc/apt/sources.list para evitar advertencias de targets duplicados
-echo "# Repositories managed in /etc/apt/sources.list.d/system76.sources" > /etc/apt/sources.list
+# Limpiar /etc/apt/sources.list tradicional y archivos antiguos para evitar fuentes duplicadas
+echo "# Repositories managed in /etc/apt/sources.list.d/*.sources" > /etc/apt/sources.list
+rm -f /etc/apt/sources.list.d/system76.sources /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+
+# Configurar fuentes oficiales de Pop!_OS formato deb822
+cat << 'EOF' > /etc/apt/sources.list.d/pop-os-apps.sources
+X-Repolib-Name: Pop_OS Applications
+Enabled: yes
+Types: deb
+URIs: http://apt.pop-os.org/proprietary
+Suites: noble
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+EOF
+
+cat << 'EOF' > /etc/apt/sources.list.d/pop-os-release.sources
+X-Repolib-Name: Pop_OS Release Sources
+Enabled: yes
+Types: deb deb-src
+URIs: http://apt.pop-os.org/release
+Suites: noble
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg
+EOF
+
+cat << 'EOF' > /etc/apt/sources.list.d/system.sources
+X-Repolib-Name: Pop_OS System Sources
+Enabled: yes
+Types: deb deb-src
+URIs: http://apt.pop-os.org/ubuntu
+Suites: noble noble-security noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+X-Repolib-ID: system
+X-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu
+EOF
+
+chmod 644 /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+
+# Pinning prioritario de Pop!_OS (o=pop-os-release -> Pin-Priority 1001)
+cat << 'EOF' > /etc/apt/preferences.d/pop-default-settings
+Package: *
+Pin: release o=pop-os-release
+Pin-Priority: 1001
+EOF
+chmod 644 /etc/apt/preferences.d/pop-default-settings
+
+# Configuración de Phased-Updates para Pop!_OS
+cat << 'EOF' > /etc/apt/apt.conf.d/76pop-default-settings
+APT::Get::Always-Include-Phased-Updates "true";
+EOF
+chmod 644 /etc/apt/apt.conf.d/76pop-default-settings
 
 # Vincular plantillas oficiales de Pop!_OS para aptsources / python-apt
 mkdir -p /usr/share/python-apt/templates
 ln -sf Ubuntu.info /usr/share/python-apt/templates/Pop.info 2>/dev/null || true
 ln -sf Ubuntu.mirrors /usr/share/python-apt/templates/Pop.mirrors 2>/dev/null || true
-
-# Repositorio VSCodium
-if [ ! -f /etc/apt/keyrings/vscodium-archive-keyring.gpg ]; then
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL --connect-timeout 10 "https://gitlab.com/paulcarroty/vscodium-deb-rpm-repo/raw/master/pub.gpg" | gpg --dearmor -o /etc/apt/keyrings/vscodium-archive-keyring.gpg 2>/dev/null || true
-fi
-echo 'deb [ signed-by=/etc/apt/keyrings/vscodium-archive-keyring.gpg ] https://download.vscodium.com/debs vscodium main' > /etc/apt/sources.list.d/vscodium.list
 
 # Repositorio Fastfetch (PPA directo vía list/gpg)
 if [ ! -f /etc/apt/sources.list.d/fastfetch.list ]; then
@@ -1124,19 +1397,28 @@ if [ ! -f /etc/apt/sources.list.d/fastfetch.list ]; then
     curl -fsSL --connect-timeout 10 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x83A1440263673F60" | gpg --dearmor -o /etc/apt/trusted.gpg.d/fastfetch.gpg 2>/dev/null || true
 fi
 
-apt-get update -y || apt-get update -y --fix-missing || true
-
-if ! apt-cache show pop-de-cosmic >/dev/null 2>&1; then
-    echo "[CHROOT:WARN] pop-de-cosmic aún no aparece en cache. Verificando repositorios Pop!_OS..."
-    apt-get update -y || true
+# Actualización limpia y desatendida de repositorios APT
+echo "[CHROOT] Ejecutando apt-get update limpio e ininterrumpido..."
+apt-get clean
+if ! apt-get update -y; then
+    echo "[CHROOT:WARN] apt-get update falló; se elimina el repositorio externo de Fastfetch y se reintenta..."
+    rm -f /etc/apt/sources.list.d/fastfetch.list /etc/apt/trusted.gpg.d/fastfetch.gpg
+    apt-get update -y
 fi
 
-# Desinstalar bloatware
+if ! apt-cache show pop-de-cosmic >/dev/null 2>&1; then
+    echo "[CHROOT:WARN] pop-de-cosmic no detectado de inmediato. Reintentando actualización con fix-missing..."
+    apt-get update -y --fix-missing || true
+fi
+
+# Desinstalar bloatware no deseado
 echo "[CHROOT] Purgando thunderbird, popsicle, xterm, gnome-terminal..."
 apt-get purge -y thunderbird 'thunderbird-locale-*' popsicle popsicle-gtk xterm gnome-terminal gnome-terminal-data || true
 rm -f /usr/share/applications/thunderbird.desktop /usr/share/applications/popsicle*.desktop /usr/share/applications/*xterm*.desktop /usr/share/applications/org.gnome.Terminal.desktop 2>/dev/null || true
 
-# Lista de paquetes nativos esenciales
+# ==============================================================================
+# 2. INSTALACIÓN DE COMPONENTES DEL SISTEMA, COSMIC DESKTOP Y DEPENDENCIAS
+# ==============================================================================
 APT_PACKAGES=(
     # Núcleo del sistema y soporte Live Boot
     linux-generic
@@ -1158,6 +1440,7 @@ APT_PACKAGES=(
     cosmic-files
     cosmic-greeter
     cosmic-app-library
+    firefox
 
     # Pila Gráfica: Mesa, Vulkan y OpenGL
     mesa-vulkan-drivers
@@ -1213,15 +1496,51 @@ APT_PACKAGES=(
     jq
     tree
     build-essential
-    codium
     fuse3
+
+    # Librerías y dependencias runtime compartidas para Steam, Discord, Codium y YouTube Music
+    libasound2t64
+    libasound2-plugins
+    libatk1.0-0t64
+    libatk-bridge2.0-0t64
+    libatspi0t64
+    libatomic1
+    libcairo2
+    libdbus-1-3
+    libexpat1
+    libgbm1
+    libglib2.0-0t64
+    libgtk-3-0t64
+    libnotify4
+    libnspr4
+    libnss3
+    libpango-1.0-0
+    libstdc++6
+    libudev1
+    libx11-6
+    libxcb1
+    libxcb-dri3-0
+    libxcomposite1
+    libxdamage1
+    libxext6
+    libxfixes3
+    libxkbcommon0
+    libxrandr2
+    libxtst6
+    libsecret-1-0
+    xdg-utils
+    xdg-user-dirs
+    zenity
+    xz-utils
+    lsof
 )
 
-if apt-cache show libfuse2t64 >/dev/null 2>&1; then
-    APT_PACKAGES+=(libfuse2t64)
-elif apt-cache show libfuse2 >/dev/null 2>&1; then
-    APT_PACKAGES+=(libfuse2)
-fi
+# Compatibilidad para nombres de paquetes legacy vs t64 (noble)
+for fallback_pkg in libasound2 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libglib2.0-0 libgtk-3-0 libfuse2t64 libfuse2; do
+    if apt-cache show "$fallback_pkg" >/dev/null 2>&1; then
+        APT_PACKAGES+=("$fallback_pkg")
+    fi
+done
 
 INSTALLABLE=()
 for pkg in "${APT_PACKAGES[@]}"; do
@@ -1242,6 +1561,28 @@ apt-get install -y --no-install-recommends "${INSTALLABLE[@]}" || {
 # Gráficos 32-bit para Steam
 apt-get install -y --no-install-recommends libvulkan1:i386 mesa-vulkan-drivers:i386 || true
 
+# Verificación: apt-cache puede omitir paquetes silenciosamente; abortar si falta algo esencial
+for essential_pkg in linux-generic casper calamares pop-de-cosmic cosmic-greeter; do
+    if ! dpkg -s "${essential_pkg}" >/dev/null 2>&1; then
+        echo "[CHROOT:ERROR] Paquete esencial no instalado: ${essential_pkg}" >&2
+        exit 1
+    fi
+done
+for optional_pkg in firefox fastfetch kitty; do
+    if ! dpkg -s "${optional_pkg}" >/dev/null 2>&1; then
+        echo "[CHROOT:WARN] Paquete opcional no instalado: ${optional_pkg}"
+    fi
+done
+if [ ! -x /usr/lib/firefox/firefox ]; then
+    echo "[CHROOT:WARN] Firefox no está disponible como .deb (en Ubuntu noble puede ser un paquete snap)."
+    echo "[CHROOT:WARN] La política de PreMiD no tendrá efecto; considera instalar org.mozilla.firefox vía Flatpak."
+fi
+
+# Asegurar que existan los grupos secundarios (useradd falla si falta alguno)
+for grp in render input plugdev netdev lpadmin; do
+    getent group "$grp" >/dev/null 2>&1 || groupadd -r "$grp" || true
+done
+
 # Configuración de usuario Live defokos
 if ! id defokos >/dev/null 2>&1; then
     useradd -m -s /bin/bash -G sudo,audio,video,render,input,plugdev,netdev defokos || true
@@ -1252,7 +1593,7 @@ else
     usermod -aG sudo,audio,video,render,input,plugdev,netdev defokos || true
 fi
 
-# Copiar acceso directo al instalador únicamente en el Escritorio del usuario Live
+# Copiar acceso directo al instalador en el Escritorio del usuario Live
 mkdir -p /home/defokos/Desktop
 rm -f /etc/skel/Desktop/install-defokos.desktop 2>/dev/null || true
 if [ -f /usr/share/applications/io.calamares.calamares.desktop ]; then
@@ -1262,45 +1603,206 @@ if [ -f /usr/share/applications/io.calamares.calamares.desktop ]; then
 fi
 chmod +x /usr/local/bin/calamares-launch 2>/dev/null || true
 
-# Configuración definitiva de Casper para live boot y hostname
+# Configuración de Casper para Live Boot y Hostname
 cat << 'EOCASPER' > /etc/casper.conf
 export USERNAME="defokos"
 export USERFULLNAME="DefokOS Live User"
 export HOST="defokos"
-export BUILD_SYSTEM="DefokOS"
+export BUILD_SYSTEM="Ubuntu"
 export FLAVOUR="DefokOS"
 EOCASPER
 
 echo "defokos" > /etc/hostname
 cp -f /etc/os-release /usr/lib/os-release 2>/dev/null || true
 
-# Instalar display manager
+# Instalar y habilitar display manager
 systemctl enable cosmic-greeter.service 2>/dev/null || true
 systemctl set-default graphical.target 2>/dev/null || true
 
-# Instalación de paquetes .deb locales (YouTube Music, Discord, Steam)
-DEBS_STAGE="/opt/defokos-packages"
-if [[ -d "${DEBS_STAGE}" ]]; then
-    for deb in "${DEBS_STAGE}"/*.deb; do
-        if [[ -f "$deb" ]]; then
-            echo "[CHROOT] Instalando paquete nativo $(basename "$deb")..."
-            apt-get install -y --no-install-recommends "$deb" || apt-get install -f -y --no-install-recommends || true
-        fi
-    done
+# ==============================================================================
+# 3. VERIFICACIÓN DE PAQUETES LOCALES Y CONFIGURACIÓN DE HOOKS DE INSTALADOR
+# ==============================================================================
+echo "[CHROOT] === Verificando directorio de paquetes locales /opt/defokos-installer/debs/ ==="
+mkdir -p /opt/defokos-installer/debs
+chmod 755 /opt/defokos-installer /opt/defokos-installer/debs
+
+if compgen -G "/opt/defokos-installer/debs/*.deb" > /dev/null; then
+    chmod 644 /opt/defokos-installer/debs/*.deb
+    echo "[CHROOT] Paquetes locales listos en /opt/defokos-installer/debs:"
+    ls -lh /opt/defokos-installer/debs/
+else
+    echo "[CHROOT:WARN] /opt/defokos-installer/debs no contiene archivos .deb todavía (se sincronizarán desde el host)."
 fi
 
-# Flatpak soporte base
+# Asegurar script post-instalación en /opt/defokos-installer/post-install.sh
+cat << 'EOFPOST' > /opt/defokos-installer/post-install.sh
+#!/usr/bin/env bash
+# ==============================================================================
+# DefokOS - Hook de Post-Instalación en Disco Destino (Chroot)
+# Ejecución desatendida para instalación de software local y purga limpia
+# ==============================================================================
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+export DEBCONF_NONINTERACTIVE_SEEN=true
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
+
+INSTALLER_DIR="/opt/defokos-installer"
+DEBS_DIR="${INSTALLER_DIR}/debs"
+
+echo "[DEFOKOS:POSTINST] Iniciando post-instalación desatendida en disco destino..."
+
+# Habilitar soporte multilib por compatibilidad
+dpkg --add-architecture i386 2>/dev/null || true
+
+# 1. Instalar los 4 programas usando dpkg -i /opt/defokos-installer/debs/*.deb
+if [ -d "${DEBS_DIR}" ] && compgen -G "${DEBS_DIR}/*.deb" > /dev/null; then
+    echo "[DEFOKOS:POSTINST] Instalando paquetes locales con dpkg..."
+    dpkg --force-confdef --force-confold -i "${DEBS_DIR}"/*.deb || true
+
+    # 2. Forzar la resolución de dependencias con apt-get install -f -y
+    echo "[DEFOKOS:POSTINST] Forzando resolución de dependencias con apt-get install -f -y..."
+    apt-get update -y || true
+    apt-get install -f -y || echo "[DEFOKOS:POSTINST] WARN: apt-get install -f falló (¿sin red?)"
+else
+    echo "[DEFOKOS:POSTINST] No se encontraron paquetes .deb para instalar."
+fi
+
+# 3. Purga destructiva de /opt/defokos-installer/debs/
+echo "[DEFOKOS:POSTINST] Ejecutando purga destructiva de paquetes temporales..."
+rm -rf "${DEBS_DIR}"
+rm -rf "${INSTALLER_DIR}" 2>/dev/null || true
+
+# 4. Eliminar cachés (apt-get clean, apt-get autoremove -y)
+echo "[DEFOKOS:POSTINST] Limpiando cachés de APT y paquetes huérfanos..."
+apt-get autoremove -y --purge || true
+apt-get clean -y || true
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/*.bin /tmp/* /var/tmp/* 2>/dev/null || true
+
+# 5. Borrar logs temporales para no dejar rastro
+echo "[DEFOKOS:POSTINST] Eliminando logs temporales..."
+find /var/log -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
+rm -f /var/log/dpkg.log* /var/log/apt/* /var/log/defokos*.log 2>/dev/null || true
+
+# 6. Limpiar artefactos de la sesión Live que NO deben quedar en el sistema instalado
+echo "[DEFOKOS:POSTINST] Eliminando artefactos de la sesión Live..."
+rm -f /etc/sudoers.d/defokos 2>/dev/null || true
+rm -f /etc/xdg/autostart/io.calamares.calamares.desktop /usr/share/applications/io.calamares.calamares.desktop 2>/dev/null || true
+rm -f /home/*/Desktop/install-defokos.desktop /etc/skel/Desktop/install-defokos.desktop 2>/dev/null || true
+for fav in /usr/share/cosmic/com.system76.CosmicAppList/v1/favorites \
+           /etc/skel/.config/cosmic/com.system76.CosmicAppList/v1/favorites \
+           /home/*/.config/cosmic/com.system76.CosmicAppList/v1/favorites; do
+    if [ -f "$fav" ]; then sed -i '/"io.calamares.calamares"/d' "$fav" 2>/dev/null || true; fi
+done
+# El autologin del usuario Live (initial_session) impediría iniciar sesión en el sistema instalado
+if [ -f /etc/greetd/cosmic-greeter.toml ]; then
+    sed -i '/^\[initial_session\]/,/^$/d' /etc/greetd/cosmic-greeter.toml 2>/dev/null || true
+fi
+# Eliminar el usuario Live (defokos:defokos) solo si existe otro usuario normal
+if id defokos >/dev/null 2>&1; then
+    OTHER_USERS="$(getent passwd | awk -F: '$3>=1000 && $3<60000 && $1!="defokos" {print $1}')"
+    if [ -n "${OTHER_USERS}" ]; then
+        userdel -r defokos 2>/dev/null || true
+    fi
+fi
+
+# Desactivar y remover servicio de primera ejecución si existiera
+systemctl disable defokos-postinstall.service 2>/dev/null || true
+rm -f /etc/systemd/system/defokos-postinstall.service 2>/dev/null || true
+
+echo "[DEFOKOS:POSTINST] Instalación de software completada y sistema 100% limpio."
+exit 0
+EOFPOST
+chmod 755 /opt/defokos-installer/post-install.sh
+
+# Integración con Pop!_OS distinst hooks (chroot hook automático)
+mkdir -p /usr/lib/distinst/hooks/post-install /etc/distinst/hooks/post-install
+cat << 'EOFDISTINST' > /usr/lib/distinst/hooks/post-install/99-defokos-postinstall
+#!/bin/bash
+if [ -x /opt/defokos-installer/post-install.sh ]; then
+    /bin/bash /opt/defokos-installer/post-install.sh
+fi
+EOFDISTINST
+chmod +x /usr/lib/distinst/hooks/post-install/99-defokos-postinstall
+cp -f /usr/lib/distinst/hooks/post-install/99-defokos-postinstall /etc/distinst/hooks/post-install/99-defokos-postinstall
+
+# Integración con Ubiquity / Casper hooks
+mkdir -p /usr/lib/ubiquity/target-config
+cat << 'EOFUBI' > /usr/lib/ubiquity/target-config/99-defokos-postinstall
+#!/bin/bash
+if [ -x /opt/defokos-installer/post-install.sh ]; then
+    /bin/bash /opt/defokos-installer/post-install.sh
+fi
+EOFUBI
+chmod +x /usr/lib/ubiquity/target-config/99-defokos-postinstall
+
+# Servicio systemd de contingencia en caso de instalador sin soporte directo de hooks
+cat << 'EOFSRV' > /etc/systemd/system/defokos-postinstall.service
+[Unit]
+Description=DefokOS Target Disk Post-Install Setup
+ConditionPathExists=/opt/defokos-installer/debs
+ConditionKernelCommandLine=!boot=casper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/defokos-installer/post-install.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOFSRV
+systemctl enable defokos-postinstall.service 2>/dev/null || true
+
+# Soporte Flatpak base
 apt-get install -y --no-install-recommends flatpak || true
 flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 flatpak uninstall --system -y com.discordapp.Discord 2>/dev/null || true
 
-# Permisos PreMiD
+# Permisos extensión PreMiD
 for ext in "/usr/lib/firefox/browser/extensions/support@premid.app.xpi" "/usr/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/support@premid.app.xpi"; do
     if [[ -f "$ext" ]]; then chmod 644 "$ext" || true; fi
 done
 
-# Limpieza Profunda para mantener SquashFS por debajo de 3 GB
-echo "[CHROOT] Optimizando y limpiando cachés para compresión compacta..."
+# ==============================================================================
+# 4. LIMPIEZA PROFUNDA DE BUILD-TIME (PRESERVANDO /opt/defokos-installer)
+# ==============================================================================
+echo "[CHROOT] Asegurando soporte overlayfs en initramfs-tools..."
+mkdir -p /etc/initramfs-tools
+if ! grep -q "^overlay" /etc/initramfs-tools/modules 2>/dev/null; then
+    echo "overlay" >> /etc/initramfs-tools/modules
+fi
+
+if [ -f /usr/share/initramfs-tools/scripts/casper-helpers ]; then
+    sed -i 's/\[ "${BUILD_SYSTEM}" = "Debian" \] || \[ "${BUILD_SYSTEM}" = "Ubuntu" \]/[ "${BUILD_SYSTEM}" = "Debian" ] || [ "${BUILD_SYSTEM}" = "Ubuntu" ] || [ "${BUILD_SYSTEM}" = "DefokOS" ]/g' /usr/share/initramfs-tools/scripts/casper-helpers || true
+fi
+
+echo "[CHROOT] Generando initramfs de arranque Live (Casper) para los kernels instalados..."
+dpkg --configure -a || true
+for kver in $(ls -1 /lib/modules 2>/dev/null); do
+    echo "[CHROOT] Compilando initramfs para kernel ${kver}..."
+    if [ ! -f "/boot/initrd.img-${kver}" ]; then
+        update-initramfs -c -k "${kver}" || update-initramfs -u -k "${kver}" || true
+    else
+        update-initramfs -u -k "${kver}" || true
+    fi
+done
+if ! ls /boot/initrd.img-* >/dev/null 2>&1; then
+    echo "[CHROOT] Forzando creación general de initramfs (update-initramfs -c -k all)..."
+    update-initramfs -c -k all || true
+fi
+LATEST_KIMG=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -n1 || true)
+if [ -n "${LATEST_KIMG}" ]; then
+    KVER="${LATEST_KIMG##*/vmlinuz-}"
+    ln -sf "vmlinuz-${KVER}" /boot/vmlinuz
+    if [ -f "/boot/initrd.img-${KVER}" ]; then
+        ln -sf "initrd.img-${KVER}" /boot/initrd.img
+    fi
+fi
+
+echo "[CHROOT] Optimizando y limpiando cachés del entorno base para compresión compacta..."
 rm -rf /var/lib/flatpak/runtime/* /var/lib/flatpak/app/* /var/lib/flatpak/.removed/* 2>/dev/null || true
 apt-get autoremove -y --purge || true
 apt-get clean -y || true
@@ -1309,8 +1811,9 @@ find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null || true
 truncate -s 0 /etc/machine-id || true
 rm -f /var/lib/dbus/machine-id 2>/dev/null || true
 
+rm -f /etc/apt/apt.conf.d/99defokos-noninteractive
 echo "[CHROOT] Aprovisionamiento completado con éxito."
-EOF
+CHROOT_SETUP_EOF
 chmod +x "${SCRIPTS_DIR}/chroot-setup.sh"
 
 # --- 10. Script de Tema (apply-theme.sh) ---
@@ -1333,6 +1836,14 @@ fi
 
 if command -v update-grub >/dev/null 2>&1; then
     update-grub 2>/dev/null || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    for theme in hicolor Pop pop-os-branding; do
+        if [ -d "/usr/share/icons/${theme}" ]; then
+            gtk-update-icon-cache -f -t "/usr/share/icons/${theme}" 2>/dev/null || true
+        fi
+    done
 fi
 
 echo "[THEME] Tema y fuentes aplicados correctamente."
@@ -1387,28 +1898,33 @@ EOF
 
     # Inyección de overlay en chroot
     log_info "Inyectando overlay temático en el chroot..."
-    rsync -av "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
+    rsync -av --chown=root:root "${OVERLAY_DIR}/" "${CHROOT_DIR}/"
+
+    # Inyección garantizada de paquetes locales (.deb) en /opt/defokos-installer/debs/
+    log_info "Inyectando paquetes locales en ${CHROOT_DIR}/opt/defokos-installer/debs/..."
+    mkdir -p "${CHROOT_DIR}/opt/defokos-installer/debs"
+    if compgen -G "${DEBS_DIR}/*.deb" > /dev/null; then
+        cp -f "${DEBS_DIR}"/*.deb "${CHROOT_DIR}/opt/defokos-installer/debs/"
+        chmod 755 "${CHROOT_DIR}/opt/defokos-installer" "${CHROOT_DIR}/opt/defokos-installer/debs"
+        chmod 644 "${CHROOT_DIR}/opt/defokos-installer/debs"/*.deb
+    fi
 
     # ==============================================================================
     # PASO 6: EJECUCIÓN DE SCRIPTS DE APROVISIONAMIENTO Y COSMIC DESKTOP
     # ==============================================================================
-    log_step "Paso 6: Aprovisionando COSMIC Desktop, Mesa, Vulkan, Pipewire y Apps .deb"
+    log_step "Paso 6: Aprovisionando Repositorios Pop!_OS, COSMIC Desktop y Entorno Live"
 
     STAGE_SCRIPTS="${CHROOT_DIR}/opt/defokos-build-scripts"
-    STAGE_DEBS="${CHROOT_DIR}/opt/defokos-packages"
-    mkdir -p "${STAGE_SCRIPTS}" "${STAGE_DEBS}"
+    mkdir -p "${STAGE_SCRIPTS}"
 
     cp -r "${SCRIPTS_DIR}/"* "${STAGE_SCRIPTS}/"
     chmod +x "${STAGE_SCRIPTS}/"*.sh
 
-    if ls "${DEBS_DIR}"/*.deb >/dev/null 2>&1; then
-        cp -f "${DEBS_DIR}/"*.deb "${STAGE_DEBS}/"
-    fi
-
     chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/chroot-setup.sh
     chroot "${CHROOT_DIR}" /bin/bash /opt/defokos-build-scripts/apply-theme.sh
 
-    rm -rf "${STAGE_SCRIPTS}" "${STAGE_DEBS}"
+    # Limpiar únicamente los scripts temporales de construcción, preservando /opt/defokos-installer
+    rm -rf "${STAGE_SCRIPTS}"
     log_success "Aprovisionamiento dentro del chroot completado."
 
     # ==============================================================================
@@ -1440,8 +1956,39 @@ mkdir -p "${ISO_EXTRACT_DIR}/EFI/BOOT"
 mkdir -p "${ISO_EXTRACT_DIR}/isolinux"
 
 # 1. Sincronizar Kernel e Initramfs desde el chroot
-LATEST_KERNEL=$(ls -t "${CHROOT_DIR}/boot/vmlinuz"* 2>/dev/null | head -n1 || true)
-LATEST_INITRD=$(ls -t "${CHROOT_DIR}/boot/initrd.img"* 2>/dev/null | head -n1 || true)
+LATEST_KERNEL=$(ls -1 "${CHROOT_DIR}"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -n1 || true)
+if [[ -z "${LATEST_KERNEL}" ]] && [[ -f "${CHROOT_DIR}/boot/vmlinuz" ]]; then
+    LATEST_KERNEL="${CHROOT_DIR}/boot/vmlinuz"
+fi
+
+LATEST_INITRD=$(ls -1 "${CHROOT_DIR}"/boot/initrd.img-* 2>/dev/null | sort -V | tail -n1 || true)
+if [[ -z "${LATEST_INITRD}" ]] && [[ -f "${CHROOT_DIR}/boot/initrd.img" ]] && [[ ! -L "${CHROOT_DIR}/boot/initrd.img" || -e "${CHROOT_DIR}/boot/initrd.img" ]]; then
+    LATEST_INITRD="${CHROOT_DIR}/boot/initrd.img"
+fi
+
+# Autoreparación: si no existe initrd.img, generarlo dentro del chroot
+if [[ -z "${LATEST_INITRD}" ]] && [[ -n "${LATEST_KERNEL}" ]]; then
+    log_warn "Initrd no encontrado en /boot. Compilando initramfs Live (Casper) dentro del chroot..."
+    KERNEL_VER="$(basename "${LATEST_KERNEL}" | sed 's/^vmlinuz-//')"
+    mount -t proc proc "${CHROOT_DIR}/proc" 2>/dev/null || true
+    mount -t sysfs sysfs "${CHROOT_DIR}/sys" 2>/dev/null || true
+    mount --bind /dev "${CHROOT_DIR}/dev" 2>/dev/null || true
+
+    chroot "${CHROOT_DIR}" dpkg --configure -a || true
+    for kv in $(ls -1 "${CHROOT_DIR}/lib/modules" 2>/dev/null); do
+        chroot "${CHROOT_DIR}" update-initramfs -c -k "${kv}" || chroot "${CHROOT_DIR}" update-initramfs -u -k "${kv}" || true
+    done
+    chroot "${CHROOT_DIR}" update-initramfs -c -k "${KERNEL_VER}" 2>/dev/null || true
+
+    umount -lf "${CHROOT_DIR}/dev" 2>/dev/null || true
+    umount -lf "${CHROOT_DIR}/sys" 2>/dev/null || true
+    umount -lf "${CHROOT_DIR}/proc" 2>/dev/null || true
+
+    LATEST_INITRD=$(ls -1 "${CHROOT_DIR}"/boot/initrd.img-* 2>/dev/null | sort -V | tail -n1 || true)
+    if [[ -z "${LATEST_INITRD}" ]] && [[ -f "${CHROOT_DIR}/boot/initrd.img" ]] && [[ ! -L "${CHROOT_DIR}/boot/initrd.img" || -e "${CHROOT_DIR}/boot/initrd.img" ]]; then
+        LATEST_INITRD="${CHROOT_DIR}/boot/initrd.img"
+    fi
+fi
 
 if [[ -z "${LATEST_KERNEL}" ]] || [[ -z "${LATEST_INITRD}" ]]; then
     log_err "No se encontró el kernel o initrd en ${CHROOT_DIR}/boot/."
@@ -1464,6 +2011,8 @@ EOF
 
 # Copiar módulos de GRUB x86_64-efi a la estructura de la ISO para carga dinámica sin errores
 mkdir -p "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi"
+mkdir -p "${ISO_EXTRACT_DIR}/boot/grub/fonts"
+cp -f /usr/share/grub/unicode.pf2 "${ISO_EXTRACT_DIR}/boot/grub/fonts/unicode.pf2" 2>/dev/null || true
 if [[ -d "/usr/lib/grub/x86_64-efi" ]]; then
     cp -rf /usr/lib/grub/x86_64-efi/*.mod "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
     cp -rf /usr/lib/grub/x86_64-efi/*.lst "${ISO_EXTRACT_DIR}/boot/grub/x86_64-efi/" 2>/dev/null || true
@@ -1510,7 +2059,9 @@ insmod gfxterm
 insmod png
 insmod gfxmenu
 
-terminal_output gfxterm
+if loadfont /boot/grub/fonts/unicode.pf2; then
+    terminal_output gfxterm
+fi
 
 if [ -f /boot/grub/themes/pop/background.png ]; then
     background_image /boot/grub/themes/pop/background.png
@@ -1583,8 +2134,15 @@ if [[ "${PACK_ONLY}" != "true" ]]; then
     SQUASHFS_FILE="${ISO_EXTRACT_DIR}/casper/filesystem.squashfs"
     rm -f "${SQUASHFS_FILE}"
 
+    # Eliminar ACLs residuales (unlock-workspace.sh): su máscara altera los bits de grupo
+    # (p.ej. /etc/sudoers 0440 -> 0460) y se empaquetaría así dentro de la ISO.
+    if command -v setfacl >/dev/null 2>&1; then
+        log_info "Eliminando ACLs residuales del chroot antes de empaquetar..."
+        setfacl -R -b "${CHROOT_DIR}" 2>/dev/null || true
+    fi
+
     # Metadata de la imagen
-    printf $(du -sx --block-size=1 "${CHROOT_DIR}" | cut -f1) > "${ISO_EXTRACT_DIR}/casper/filesystem.size"
+    du -sx --block-size=1 "${CHROOT_DIR}" | cut -f1 | tr -d '\n' > "${ISO_EXTRACT_DIR}/casper/filesystem.size"
     chroot "${CHROOT_DIR}" dpkg-query -W --showformat='${Package} ${Version}\n' > "${ISO_EXTRACT_DIR}/casper/filesystem.manifest" 2>/dev/null || true
     cp -f "${ISO_EXTRACT_DIR}/casper/filesystem.manifest" "${ISO_EXTRACT_DIR}/casper/filesystem.manifest-desktop" 2>/dev/null || true
 
